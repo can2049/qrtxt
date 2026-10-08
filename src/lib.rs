@@ -1,4 +1,4 @@
-//! `qrterm` turns text into a QR code rendered in the terminal.
+//! `qrtxt` turns text into a QR code rendered in the terminal.
 //!
 //! # Pipeline
 //!

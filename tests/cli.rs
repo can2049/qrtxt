@@ -3,18 +3,18 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
 
-fn qrterm() -> Command {
-    Command::cargo_bin("qrterm").expect("binary is built")
+fn qrtxt() -> Command {
+    Command::cargo_bin("qrtxt").expect("binary is built")
 }
 
 fn stdout(args: &[&str]) -> String {
-    let output = qrterm().args(args).output().expect("runs");
+    let output = qrtxt().args(args).output().expect("runs");
     assert!(output.status.success(), "expected success: {output:?}");
     String::from_utf8(output.stdout).expect("utf-8 output")
 }
 
 fn piped(input: &str) -> String {
-    let output = qrterm().write_stdin(input).output().expect("runs");
+    let output = qrtxt().write_stdin(input).output().expect("runs");
     assert!(output.status.success(), "expected success: {output:?}");
     String::from_utf8(output.stdout).expect("utf-8 output")
 }
@@ -46,7 +46,7 @@ fn quadrant_and_braille_produce_output() {
 
 #[test]
 fn file_input_matches_literal() {
-    let path = std::env::temp_dir().join(format!("qrterm-test-{}.txt", std::process::id()));
+    let path = std::env::temp_dir().join(format!("qrtxt-test-{}.txt", std::process::id()));
     std::fs::write(&path, "hello").unwrap();
     let from_file = stdout(&["--file", path.to_str().unwrap()]);
     let _ = std::fs::remove_file(&path);
@@ -62,7 +62,7 @@ fn stdin_strips_one_trailing_newline() {
 #[test]
 fn preserve_newline_keeps_the_line_ending() {
     assert_ne!(piped("hello\n"), {
-        let output = qrterm()
+        let output = qrtxt()
             .args(["--preserve-newline"])
             .write_stdin("hello\n")
             .output()
@@ -73,7 +73,7 @@ fn preserve_newline_keeps_the_line_ending() {
 
 #[test]
 fn empty_input_exits_two() {
-    qrterm()
+    qrtxt()
         .write_stdin("")
         .assert()
         .failure()
@@ -83,7 +83,7 @@ fn empty_input_exits_two() {
 
 #[test]
 fn file_and_literal_conflict_exits_two() {
-    qrterm()
+    qrtxt()
         .args(["--file", "payload.txt", "hello"])
         .assert()
         .failure()
@@ -106,7 +106,7 @@ fn border_zero_shrinks_the_output() {
 fn oversized_input_exits_two_without_leaking_payload() {
     // Lowercase forces byte mode; 4000 bytes exceeds version 40-L (~2953).
     let secret = "x".repeat(4000);
-    let output = qrterm().args(["-e", "L", &secret]).output().unwrap();
+    let output = qrtxt().args(["-e", "L", &secret]).output().unwrap();
     assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(!stderr.contains(&secret), "stderr leaked the payload");
@@ -118,10 +118,10 @@ fn oversized_input_exits_two_without_leaking_payload() {
 
 #[test]
 fn version_and_help_are_available() {
-    qrterm()
+    qrtxt()
         .arg("--version")
         .assert()
         .success()
-        .stdout(predicate::str::contains("qrterm"));
-    qrterm().arg("--help").assert().success();
+        .stdout(predicate::str::contains("qrtxt"));
+    qrtxt().arg("--help").assert().success();
 }

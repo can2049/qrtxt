@@ -1,4 +1,4 @@
-# qrterm
+# qrtxt
 
 Turn text into a QR code, right in your terminal.
 
@@ -6,12 +6,12 @@ Turn text into a QR code, right in your terminal.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-`qrterm` reads a string, a file, or piped input and prints an ordinary QR code
+`qrtxt` reads a string, a file, or piped input and prints an ordinary QR code
 using Unicode block characters. No graphics environment is required — just a
 UTF-8 terminal.
 
 ```console
-$ qrterm "hi"
+$ qrtxt "hi"
 
      ▄▄▄▄▄ ██  ▄ █ ▄▄▄▄▄
      █   █ █  █▄ █ █   █
@@ -44,10 +44,10 @@ $ qrterm "hi"
 From a clone:
 
 ```console
-git clone https://github.com/can2049/qrterm
-cd qrterm
+git clone https://github.com/can2049/qrtxt
+cd qrtxt
 cargo build --release
-# binary at target/release/qrterm
+# binary at target/release/qrtxt
 ```
 
 Or install directly with Cargo:
@@ -61,7 +61,7 @@ Requires Rust 1.85 or newer.
 ## Usage
 
 ```text
-qrterm [OPTIONS] [DATA]
+qrtxt [OPTIONS] [DATA]
 
 Arguments:
   [DATA]                 Literal payload; when omitted, read from --file or stdin
@@ -83,25 +83,25 @@ Options:
 
 ```console
 # literal string
-qrterm "https://example.com"
+qrtxt "https://example.com"
 
 # pipe a secret to the screen without touching disk
-cat token.txt | qrterm
+cat token.txt | qrtxt
 
 # read from a file
-qrterm --file payload.txt
+qrtxt --file payload.txt
 
 # higher error correction
-qrterm --error H "important payload"
+qrtxt --error H "important payload"
 
 # a bigger symbol and a tighter quiet zone
-qrterm --scale 2 --border 1 "hello"
+qrtxt --scale 2 --border 1 "hello"
 
 # denser packing for narrow terminals
-qrterm --glyphs braille "hello"
+qrtxt --glyphs braille "hello"
 
 # light-background terminal
-qrterm --invert "hello"
+qrtxt --invert "hello"
 ```
 
 ## Glyph sets
@@ -119,7 +119,7 @@ qrterm --invert "hello"
 Block characters are drawn in the terminal's **foreground** color, so the default
 output assumes a dark-background terminal. On a light-background terminal the
 code would appear inverted, so pass `--invert` to restore a scannable
-dark-on-light code. `qrterm` never queries the terminal background itself.
+dark-on-light code. `qrtxt` never queries the terminal background itself.
 
 ## Exit codes
 
@@ -129,7 +129,7 @@ dark-on-light code. `qrterm` never queries the terminal background itself.
 | `2` | Usage or input error (empty input, conflicting flags, data too long) |
 | `1` | Runtime/IO error (unreadable file, write failure) |
 
-A closed downstream pipe (for example `qrterm ... | head`) is treated as success.
+A closed downstream pipe (for example `qrtxt ... | head`) is treated as success.
 
 ## How it works
 

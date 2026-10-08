@@ -31,12 +31,12 @@ fn tile_width(glyph: &str) -> usize {
 }
 
 fn render(args: &[&str]) -> String {
-    let output = Command::cargo_bin("qrterm")
+    let output = Command::cargo_bin("qrtxt")
         .expect("binary is built")
         .args(args)
         .output()
         .expect("runs");
-    assert!(output.status.success(), "qrterm failed: {output:?}");
+    assert!(output.status.success(), "qrtxt failed: {output:?}");
     String::from_utf8(output.stdout).expect("utf-8 output")
 }
 

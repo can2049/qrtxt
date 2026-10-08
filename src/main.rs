@@ -4,7 +4,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-use qrterm::cli::{Cli, run_with};
+use qrtxt::cli::{Cli, run_with};
 
 fn main() -> ExitCode {
     let cli = match Cli::try_parse() {
@@ -16,7 +16,7 @@ fn main() -> ExitCode {
     match run_with(&cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("qrterm: {error}");
+            eprintln!("qrtxt: {error}");
             ExitCode::from(u8::try_from(error.exit_code()).unwrap_or(1))
         }
     }

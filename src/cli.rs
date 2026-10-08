@@ -9,7 +9,7 @@ use crate::types::{Config, Ec, GlyphSet, InputSpec, RenderMode};
 
 /// Turn text into a terminal QR code.
 #[derive(Debug, Parser)]
-#[command(name = "qrterm", version, about = "Turn text into a terminal QR code")]
+#[command(name = "qrtxt", version, about = "Turn text into a terminal QR code")]
 pub struct Cli {
     /// Literal payload; when omitted, read from --file or standard input.
     #[arg(value_name = "DATA")]
@@ -130,7 +130,7 @@ mod tests {
 
     fn parse(args: &[&str]) -> Cli {
         // The first element is argv[0] (the program name).
-        let mut argv = vec!["qrterm"];
+        let mut argv = vec!["qrtxt"];
         argv.extend_from_slice(args);
         Cli::try_parse_from(argv).expect("arguments should parse")
     }
@@ -155,13 +155,13 @@ mod tests {
 
     #[test]
     fn file_and_literal_conflict() {
-        assert!(Cli::try_parse_from(["qrterm", "--file", "a.txt", "hello"]).is_err());
+        assert!(Cli::try_parse_from(["qrtxt", "--file", "a.txt", "hello"]).is_err());
     }
 
     #[test]
     fn invalid_values_are_rejected() {
-        assert!(Cli::try_parse_from(["qrterm", "--error", "Z", "x"]).is_err());
-        assert!(Cli::try_parse_from(["qrterm", "--glyphs", "dense", "x"]).is_err());
+        assert!(Cli::try_parse_from(["qrtxt", "--error", "Z", "x"]).is_err());
+        assert!(Cli::try_parse_from(["qrtxt", "--glyphs", "dense", "x"]).is_err());
     }
 
     #[test]

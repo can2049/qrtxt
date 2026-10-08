@@ -1,4 +1,4 @@
-# qrterm
+# qrtxt
 
 在终端里把文字变成二维码。
 
@@ -6,11 +6,11 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-`qrterm` 读取字符串、文件或管道输入,用 Unicode 块字符在标准输出上打印一个普通
+`qrtxt` 读取字符串、文件或管道输入,用 Unicode 块字符在标准输出上打印一个普通
 二维码。无需图形环境,只要有 UTF-8 终端即可。
 
 ```console
-$ qrterm "hi"
+$ qrtxt "hi"
 
      ▄▄▄▄▄ ██  ▄ █ ▄▄▄▄▄
      █   █ █  █▄ █ █   █
@@ -42,10 +42,10 @@ $ qrterm "hi"
 从源码构建:
 
 ```console
-git clone https://github.com/can2049/qrterm
-cd qrterm
+git clone https://github.com/can2049/qrtxt
+cd qrtxt
 cargo build --release
-# 产物在 target/release/qrterm
+# 产物在 target/release/qrtxt
 ```
 
 或用 Cargo 直接安装:
@@ -59,7 +59,7 @@ cargo install --path .
 ## 用法
 
 ```text
-qrterm [OPTIONS] [DATA]
+qrtxt [OPTIONS] [DATA]
 
 参数:
   [DATA]                 字面量 payload;省略时从 --file 或 stdin 读取
@@ -81,25 +81,25 @@ qrterm [OPTIONS] [DATA]
 
 ```console
 # 字面量字符串
-qrterm "https://example.com"
+qrtxt "https://example.com"
 
 # 把密钥直接喷到屏幕,全程不落盘
-cat token.txt | qrterm
+cat token.txt | qrtxt
 
 # 从文件读取
-qrterm --file payload.txt
+qrtxt --file payload.txt
 
 # 更高的纠错等级
-qrterm --error H "important payload"
+qrtxt --error H "important payload"
 
 # 更大尺寸、更窄静默区
-qrterm --scale 2 --border 1 "hello"
+qrtxt --scale 2 --border 1 "hello"
 
 # 为窄终端选择更高密度
-qrterm --glyphs braille "hello"
+qrtxt --glyphs braille "hello"
 
 # 浅色背景终端
-qrterm --invert "hello"
+qrtxt --invert "hello"
 ```
 
 ## 字形集
@@ -115,7 +115,7 @@ qrterm --invert "hello"
 ## 深色与浅色终端
 
 块字符以终端**前景色**绘制,因此默认输出假设深色背景终端。浅色背景终端下二维码
-会整体反相,此时加 `--invert` 可恢复可扫的 dark-on-light 结果。`qrterm` 不会去探测
+会整体反相,此时加 `--invert` 可恢复可扫的 dark-on-light 结果。`qrtxt` 不会去探测
 终端背景色。
 
 ## 退出码
@@ -126,7 +126,7 @@ qrterm --invert "hello"
 | `2` | 用法/输入错误(空输入、参数冲突、数据过长) |
 | `1` | 运行时/IO 错误(文件不可读、写入失败) |
 
-下游管道提前关闭(例如 `qrterm ... | head`)视为成功。
+下游管道提前关闭(例如 `qrtxt ... | head`)视为成功。
 
 ## 实现说明
 

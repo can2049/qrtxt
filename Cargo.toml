@@ -1,13 +1,13 @@
 [package]
-name = "qrterm"
+name = "qrtxt"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 description = "Turn text into a QR code rendered in the terminal"
 license = "MIT"
 readme = "README.md"
-repository = "https://github.com/can2049/qrterm"
-homepage = "https://github.com/can2049/qrterm"
+repository = "https://github.com/can2049/qrtxt"
+homepage = "https://github.com/can2049/qrtxt"
 authors = ["CanWang <canwhut@gmail.com>"]
 keywords = ["cli", "qr", "qrcode", "terminal", "unicode"]
 categories = ["command-line-utilities", "encoding"]
