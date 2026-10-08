@@ -1,10 +1,18 @@
 //! QR encoding, wrapping the `qrcode` crate (FR-2.*).
 
-use qrcode::types::QrError;
-use qrcode::{EcLevel, QrCode};
+use qrcode::bits::Bits;
+use qrcode::optimize::{Parser, Segment};
+use qrcode::types::{Mode, QrError};
+use qrcode::{EcLevel, QrCode, Version};
 
 use crate::error::AppError;
 use crate::types::Ec;
+
+/// ECI designator for UTF-8 (ISO/IEC 18004 assignment 26).
+const UTF8_ECI: u32 = 26;
+
+/// Highest ordinary QR version, used to bound the ECI version search.
+const MAX_VERSION: i16 = 40;
 
 fn ec_level(ec: Ec) -> EcLevel {
     match ec {
@@ -15,16 +23,79 @@ fn ec_level(ec: Ec) -> EcLevel {
     }
 }
 
+/// Whether `data` is text whose bytes must be declared as UTF-8 to decode
+/// reliably.
+///
+/// A QR symbol stores byte data with no intrinsic charset; a scanner that sees
+/// no ECI falls back to a decoder-chosen default (frequently a legacy East-Asian
+/// set), so raw UTF-8 text can come back as mojibake. Pure ASCII is unambiguous
+/// and non-UTF-8 payloads are genuinely binary, so neither needs a declaration.
+fn needs_utf8_eci(data: &[u8]) -> bool {
+    std::str::from_utf8(data).is_ok_and(|text| !text.is_ascii())
+}
+
+/// Segments for UTF-8 text, with any Kanji-mode segment forced back to bytes.
+///
+/// The crate's optimizer treats byte pairs in the Shift-JIS Kanji ranges as
+/// Kanji, but UTF-8 CJK bytes routinely fall in those ranges. Emitting Kanji
+/// segments would make scanners decode them as Shift-JIS (mojibake) and would
+/// contradict the UTF-8 ECI, so those ranges are encoded as byte data instead.
+/// Numeric and alphanumeric runs are left optimized.
+fn utf8_segments(data: &[u8], version: Version) -> Vec<Segment> {
+    Parser::new(data)
+        .optimize(version)
+        .map(|segment| match segment.mode {
+            Mode::Kanji => Segment {
+                mode: Mode::Byte,
+                ..segment
+            },
+            _ => segment,
+        })
+        .collect()
+}
+
+/// Build a QR code for `data` at the exact error level.
+///
+/// Non-ASCII text is prefixed with a UTF-8 ECI so scanners decode the bytes as
+/// UTF-8. Binary and ASCII payloads are encoded unchanged. The symbol is kept at
+/// the smallest version that fits (`qrcode` never boosts the error level).
+fn build(data: &[u8], ec: Ec) -> Result<QrCode, QrError> {
+    let level = ec_level(ec);
+    if !needs_utf8_eci(data) {
+        return QrCode::with_error_correction_level(data, level);
+    }
+    // Seed from the plain minimal version: the ECI's 12 bits rarely push the
+    // symbol up a version, so this usually succeeds on the first try.
+    let seed = match QrCode::with_error_correction_level(data, level)?.version() {
+        Version::Normal(version) | Version::Micro(version) => version,
+    };
+    for version in seed..=MAX_VERSION {
+        let version = Version::Normal(version);
+        let mut bits = Bits::new(version);
+        if bits.push_eci_designator(UTF8_ECI).is_err() {
+            break;
+        }
+        let segments = utf8_segments(data, version).into_iter();
+        if bits.push_segments(data, segments).is_err() || bits.push_terminator(level).is_err() {
+            continue;
+        }
+        if let Ok(qr) = QrCode::with_bits(bits, level) {
+            return Ok(qr);
+        }
+    }
+    Err(QrError::DataTooLong)
+}
+
 /// Whether `data` fits in a single symbol at `ec`.
 fn fits(data: &[u8], ec: Ec) -> bool {
-    QrCode::with_error_correction_level(data, ec_level(ec)).is_ok()
+    build(data, ec).is_ok()
 }
 
 /// Encode `data` into an ordinary QR code at the exact error level.
 ///
 /// `qrcode` never boosts the error level, matching qrpipe's `boost_error=false`.
 pub fn encode(data: &[u8], ec: Ec) -> Result<QrCode, AppError> {
-    QrCode::with_error_correction_level(data, ec_level(ec)).map_err(|error| match error {
+    build(data, ec).map_err(|error| match error {
         QrError::DataTooLong => {
             let max = max_prefix_fitting(data, ec);
             AppError::Input(format!(
@@ -348,7 +419,160 @@ mod tests {
     }
 
     #[test]
+    fn utf8_text_is_never_encoded_as_kanji() {
+        // A sample that the crate's optimizer would split into Kanji segments.
+        let text = "反相),\n`render` 再按字形集把网格打包成字符。";
+        let version = Version::Normal(10);
+
+        let raw: Vec<_> = Parser::new(text.as_bytes()).optimize(version).collect();
+        assert!(
+            raw.iter().any(|segment| segment.mode == Mode::Kanji),
+            "expected the crate to (mis)detect kanji in UTF-8 text"
+        );
+
+        let segments = utf8_segments(text.as_bytes(), version);
+        assert!(
+            segments.iter().all(|segment| segment.mode != Mode::Kanji),
+            "kanji segments must be downgraded to bytes"
+        );
+        assert_eq!(segments.first().unwrap().begin, 0);
+        assert_eq!(segments.last().unwrap().end, text.len());
+        for pair in segments.windows(2) {
+            assert_eq!(pair[0].end, pair[1].begin, "segments must be contiguous");
+        }
+    }
+
+    /// CJK and mixed-script payloads; entry 5 is the byte pattern that was
+    /// previously mis-encoded as Shift-JIS Kanji.
+    const CJK_SAMPLES: &[&str] = &[
+        "简体中文：你好，世界！",
+        "繁體中文：你好，世界！",
+        "ひらがな カタカナ 漢字 の テスト",
+        "한국어 테스트 안녕하세요",
+        "反相）,再按字形集把网格打包成字符。",
+        "混合 mixed ABC 123 한자 漢字 😀 ，。！？「」《》；：",
+        "参数 file 文件 值 = 42",
+    ];
+
+    #[test]
+    fn cjk_samples_need_a_utf8_eci() {
+        for sample in CJK_SAMPLES {
+            assert!(needs_utf8_eci(sample.as_bytes()), "{sample:?}");
+        }
+    }
+
+    #[test]
+    fn cjk_samples_are_never_split_into_kanji_segments() {
+        // The invariant that keeps scanners from reading CJK as Shift-JIS.
+        for sample in CJK_SAMPLES {
+            let bytes = sample.as_bytes();
+            for version in [Version::Normal(1), Version::Normal(10), Version::Normal(40)] {
+                let segments = utf8_segments(bytes, version);
+                assert!(
+                    segments.iter().all(|segment| segment.mode != Mode::Kanji),
+                    "kanji segment for {sample:?} at version {version:?}"
+                );
+                // Segments must tile the payload exactly: contiguous, gapless,
+                // and covering every byte once.
+                assert_eq!(segments.first().unwrap().begin, 0, "{sample:?}");
+                assert_eq!(segments.last().unwrap().end, bytes.len(), "{sample:?}");
+                for pair in segments.windows(2) {
+                    assert_eq!(pair[0].end, pair[1].begin, "{sample:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cjk_samples_encode_and_fit() {
+        // Every CJK sample encodes at each level and reports a matching `fits`.
+        for sample in CJK_SAMPLES {
+            for ec in [Ec::L, Ec::M, Ec::Q, Ec::H] {
+                assert!(fits(sample.as_bytes(), ec), "{sample:?} at {ec:?}");
+                assert!(
+                    encode(sample.as_bytes(), ec).is_ok(),
+                    "{sample:?} at {ec:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cjk_encoding_differs_from_the_plain_encoder() {
+        // Confirms the UTF-8 ECI / byte-mode path is actually taken for CJK: the
+        // symbol must not equal a plain (Kanji-prone) encoding of the same bytes.
+        for sample in CJK_SAMPLES {
+            let ours = encode(sample.as_bytes(), Ec::M).unwrap();
+            let plain =
+                QrCode::with_error_correction_level(sample.as_bytes(), ec_level(Ec::M)).unwrap();
+            assert_ne!(ours.to_colors(), plain.to_colors(), "{sample:?}");
+        }
+    }
+
+    #[test]
     fn chunk_one_matches_no_floor() {
         assert_eq!(split_chunks(b"hello", Ec::M, None, Some(1)).len(), 1);
+    }
+
+    #[test]
+    fn chunk_split_never_divides_a_character() {
+        // Mixed 1-, 2-, 3- and 4-byte characters; whatever the forced count, no
+        // cut may fall inside a character and the chunks must reassemble.
+        let text = "汉aé😀字\n".repeat(300);
+        for count in [2, 3, 7, 30, 97] {
+            let chunks = split_chunks(text.as_bytes(), Ec::L, None, Some(count));
+            assert_eq!(chunks.concat(), text.as_bytes(), "count {count}");
+            for chunk in &chunks {
+                assert!(
+                    std::str::from_utf8(chunk).is_ok(),
+                    "split a character at count {count}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn needs_utf8_eci_only_for_non_ascii_text() {
+        assert!(!needs_utf8_eci(b"hello"), "ascii needs no declaration");
+        assert!(needs_utf8_eci("汉字".as_bytes()), "cjk text needs one");
+        assert!(needs_utf8_eci("café".as_bytes()), "latin-1 range needs one");
+        assert!(!needs_utf8_eci(&[0xff, 0x00, 0x80]), "binary needs none");
+    }
+
+    #[test]
+    fn ascii_encoding_matches_the_plain_encoder() {
+        // No ECI is inserted, so the symbol is byte-for-byte the crate's own.
+        let data = b"plain ascii payload";
+        let ours = encode(data, Ec::M).unwrap();
+        let plain = QrCode::with_error_correction_level(data, ec_level(Ec::M)).unwrap();
+        assert_eq!(ours.to_colors(), plain.to_colors());
+    }
+
+    #[test]
+    fn non_ascii_encoding_is_declared_as_utf8() {
+        // The UTF-8 ECI changes the bit stream, so the matrix differs from a
+        // plain encoding of the same bytes.
+        let data = "参数".as_bytes();
+        let ours = encode(data, Ec::M).unwrap();
+        let plain = QrCode::with_error_correction_level(data, ec_level(Ec::M)).unwrap();
+        assert_ne!(
+            ours.to_colors(),
+            plain.to_colors(),
+            "expected an ECI-declared symbol"
+        );
+    }
+
+    #[test]
+    fn non_ascii_uses_the_smallest_version_that_fits() {
+        let data = "中文内容".as_bytes();
+        let ours = encode(data, Ec::L).unwrap();
+        let plain = QrCode::with_error_correction_level(data, ec_level(Ec::L)).unwrap();
+        // The ECI adds 12 bits, so the version can be equal or one larger.
+        assert!(
+            ours.width() >= plain.width() && ours.width() <= plain.width() + 4,
+            "unexpected version jump: {} vs {}",
+            ours.width(),
+            plain.width()
+        );
     }
 }

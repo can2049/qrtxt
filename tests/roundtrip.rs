@@ -22,6 +22,19 @@ const QUADRANT: [char; 16] = [
 
 const BRAILLE_WEIGHTS: [[u32; 4]; 2] = [[0x01, 0x02, 0x04, 0x40], [0x08, 0x10, 0x20, 0x80]];
 
+/// CJK and mixed-script payloads that must survive a full encode/decode round
+/// trip unchanged. Entry 5 is the byte pattern that was previously mis-encoded
+/// as Shift-JIS Kanji; entry 6 mixes scripts, ASCII, digits and emoji.
+const CJK_SAMPLES: &[&str] = &[
+    "简体中文：你好，世界！",
+    "繁體中文：你好，世界！",
+    "ひらがな カタカナ 漢字 の テスト",
+    "한국어 테스트 안녕하세요",
+    "反相）,再按字形集把网格打包成字符。",
+    "混合 mixed ABC 123 한자 漢字 😀 ，。！？「」《》；：",
+    "参数 file 文件 值 = 42",
+];
+
 fn tile_width(glyph: &str) -> usize {
     match glyph {
         "half" => 1,
@@ -177,6 +190,22 @@ fn round_trip(payload: &str, glyph: &str, invert: bool) -> String {
     decode(width, height, &ink, size, invert)
 }
 
+/// Like [`round_trip`], but with extra flags and the payload passed after `--`,
+/// so payloads containing option-like tokens are never parsed as options.
+fn round_trip_with(payload: &str, glyph: &str, invert: bool, extra: &[&str]) -> String {
+    let mut args = vec!["--glyphs", glyph];
+    if invert {
+        args.push("--invert");
+    }
+    args.extend_from_slice(extra);
+    args.push("--");
+    args.push(payload);
+    let text = render(&args);
+    let (width, height, ink) = parse(&text, glyph);
+    let size = symbol_size(width, glyph);
+    decode(width, height, &ink, size, invert)
+}
+
 /// Split a multi-code rendering into its individual code texts, dropping captions.
 fn multi_blocks(text: &str) -> Vec<&str> {
     text.trim_end_matches('\n')
@@ -260,6 +289,41 @@ fn higher_error_correction_round_trips() {
 }
 
 #[test]
+fn non_ascii_round_trips() {
+    // Non-ASCII text is declared with a UTF-8 ECI and must still decode exactly.
+    for payload in ["你好，世界", "参数 --file 文件", "한국어テスト😀"] {
+        assert_eq!(round_trip(payload, "half", false), payload);
+        assert_eq!(round_trip(payload, "quadrant", false), payload);
+    }
+}
+
+#[test]
+fn chunk_split_non_ascii_round_trips_in_order() {
+    // A CJK payload forced into several codes: every code must carry its own
+    // UTF-8 declaration and concatenate back to the original.
+    let payload = "汉字内容测试".repeat(400);
+    let text = render(&["-e", "L", "--chunk", "6", &payload]);
+    let blocks = multi_blocks(&text);
+    assert_eq!(blocks.len(), 6, "--chunk 6 forces six codes");
+    assert_eq!(decode_blocks(&text), payload);
+}
+
+#[test]
+fn chinese_file_split_round_trips_in_order() {
+    let raw = std::fs::read("README.zh-CN.md").expect("readme present");
+    let mut expected = String::from_utf8(raw).expect("utf-8");
+    if expected.ends_with("\r\n") {
+        expected.truncate(expected.len() - 2);
+    } else if expected.ends_with('\n') {
+        expected.pop();
+    }
+    let text = render(&["-f", "README.zh-CN.md", "-c", "30"]);
+    let blocks = multi_blocks(&text);
+    assert_eq!(blocks.len(), 30, "expected 30 codes");
+    assert_eq!(decode_blocks(&text), expected);
+}
+
+#[test]
 fn rendered_grid_matches_the_matrix() {
     use qrcode::{Color, QrCode};
 
@@ -293,5 +357,69 @@ fn rendered_grid_matches_the_matrix() {
                 );
             }
         }
+    }
+}
+
+#[test]
+fn cjk_round_trips_at_every_error_level() {
+    for payload in CJK_SAMPLES {
+        for ec in ["L", "M", "Q", "H"] {
+            let decoded = round_trip_with(payload, "half", false, &["-e", ec]);
+            assert_eq!(&decoded, payload, "ec={ec} payload={payload:?}");
+            assert!(
+                !decoded.contains('\u{FFFD}'),
+                "lossy decode at ec={ec} for {payload:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn cjk_round_trips_across_glyph_sets() {
+    for glyph in ["half", "quadrant", "braille"] {
+        for payload in CJK_SAMPLES {
+            let decoded = round_trip_with(payload, glyph, false, &[]);
+            assert_eq!(&decoded, payload, "glyph={glyph} payload={payload:?}");
+        }
+    }
+}
+
+#[test]
+fn cjk_round_trips_when_inverted() {
+    for payload in CJK_SAMPLES {
+        let decoded = round_trip_with(payload, "half", true, &[]);
+        assert_eq!(&decoded, payload, "inverted payload={payload:?}");
+    }
+}
+
+#[test]
+fn cjk_split_round_trips_in_order_without_symbol_loss() {
+    // A CJK payload large enough to split by both --chunk and --max-size. Every
+    // code must decode losslessly and, in order, reproduce the whole payload.
+    let payload = "中文测试 한국어 日本語".repeat(250);
+    for extra in [
+        ["-e", "L", "--chunk", "7"],
+        ["-e", "L", "--max-size", "400"],
+    ] {
+        let mut args = extra.to_vec();
+        args.push("--");
+        args.push(payload.as_str());
+        let text = render(&args);
+        let blocks = multi_blocks(&text);
+        assert!(blocks.len() > 1, "expected a split for {extra:?}");
+
+        let mut assembled = String::new();
+        for block in &blocks {
+            let (width, height, ink) = parse(block, "half");
+            let size = symbol_size(width, "half");
+            let part = decode(width, height, &ink, size, false);
+            assert!(!part.is_empty(), "empty code for {extra:?}");
+            assert!(
+                !part.contains('\u{FFFD}'),
+                "lossy code for {extra:?}: {part:?}"
+            );
+            assembled.push_str(&part);
+        }
+        assert_eq!(assembled, payload, "reassembly mismatch for {extra:?}");
     }
 }
