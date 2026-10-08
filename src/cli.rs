@@ -10,43 +10,31 @@ use crate::types::{Config, Ec, GlyphSet, InputSpec, RenderMode};
 
 /// Turn text into a terminal QR code.
 #[derive(Debug, Parser)]
-#[command(name = "qrtxt", version, about = "Turn text into a terminal QR code")]
+#[command(
+    name = "qrtxt",
+    version,
+    about = "Turn text into a terminal QR code",
+    long_about = "Turn text into a terminal QR code.\n\n\
+Reads a payload from a literal argument, a file, or standard input and prints it as one or \
+more QR codes drawn with Unicode block characters, so no graphics environment is needed — \
+just a UTF-8 terminal.\n\n\
+A payload too large for a single symbol is split automatically across several balanced codes, \
+printed in order under a `QR i/N` caption. Use --max-size to cap the bytes per code, or \
+--chunk to require a minimum number of codes."
+)]
 pub struct Cli {
-    /// Literal payload; when omitted, read from --file or standard input.
+    /// Literal payload to encode.
+    ///
+    /// Used exactly as given (no trailing-newline stripping). When omitted, the
+    /// payload is read from --file, or from standard input when no file is given.
     #[arg(value_name = "DATA")]
     pub data: Option<String>,
 
-    /// Read the payload from a file.
-    #[arg(
-        short = 'f',
-        long = "file",
-        value_name = "PATH",
-        conflicts_with = "data"
-    )]
-    pub file: Option<std::path::PathBuf>,
-
-    /// Do not strip one trailing newline from piped or file input.
-    #[arg(short = 'p', long = "preserve-newline")]
-    pub preserve_newline: bool,
-
-    /// Exact error-correction level: L, M, Q, or H.
-    #[arg(
-        short = 'e',
-        long = "error-correction",
-        value_name = "LEVEL",
-        default_value = "L"
-    )]
-    pub error: Ec,
-
-    /// Quiet-zone width in modules.
-    #[arg(short = 'b', long = "border", default_value_t = 4)]
-    pub border: u32,
-
-    /// Invert the ink mapping, for light-background terminals.
-    #[arg(short = 'i', long = "invert")]
-    pub invert: bool,
-
-    /// Glyph set: half (h), quadrant (q), or braille (b).
+    /// Glyph set used to pack modules into character cells: half (1x2 modules per
+    /// cell; most robust), quadrant (2x2), or braille (2x4; densest).
+    ///
+    /// Each set also accepts its first letter (h, q, b). Braille needs a font that
+    /// renders dots tightly.
     #[arg(
         short = 'g',
         long = "glyphs",
@@ -55,11 +43,27 @@ pub struct Cli {
     )]
     pub glyphs: GlyphSet,
 
-    /// Use ANSI rendering instead of Unicode block characters.
-    #[arg(short = 'a', long = "no-compact")]
-    pub no_compact: bool,
+    /// Error-correction level: L (about 7% recoverable), M (15%), Q (25%), or H
+    /// (30%).
+    ///
+    /// A higher level recovers from more damage but holds less data, which can
+    /// force the symbol to a larger version. The level is never boosted
+    /// automatically, and the value is case-insensitive.
+    #[arg(
+        short = 'e',
+        long = "error-correction",
+        value_name = "LEVEL",
+        default_value = "L"
+    )]
+    pub error: Ec,
 
-    /// Cap the payload in each QR code at BYTES (implies splitting).
+    /// Cap the payload of each QR code at BYTES bytes; implies splitting (default:
+    /// the symbol's own limit).
+    ///
+    /// Even a payload that fits one symbol is split so that no code exceeds BYTES
+    /// bytes, keeping the codes as evenly sized as possible. A value larger than a
+    /// symbol can hold is clamped down to the symbol's own limit. The value must be
+    /// at least 1.
     #[arg(
         short = 'm',
         long = "max-size",
@@ -68,7 +72,13 @@ pub struct Cli {
     )]
     pub max_size: Option<u32>,
 
-    /// Split the payload into at least COUNT QR codes when the content allows.
+    /// Split the payload across at least COUNT QR codes; advisory (default: no
+    /// minimum).
+    ///
+    /// The payload is divided into COUNT balanced codes when the content allows,
+    /// otherwise into as many codes as possible (at most one per character). Can be
+    /// combined with --max-size; whichever forces more codes wins. The value must be
+    /// at least 1.
     #[arg(
         short = 'c',
         long = "chunk",
@@ -76,6 +86,48 @@ pub struct Cli {
         value_parser = clap::value_parser!(u32).range(1..)
     )]
     pub chunk: Option<u32>,
+
+    /// Render with ANSI escape codes instead of Unicode block characters.
+    ///
+    /// Use this on terminals that do not display block glyphs correctly. The output
+    /// is wider (two spaces per module) and uses reverse-video escapes.
+    #[arg(short = 'a', long = "no-compact")]
+    pub no_compact: bool,
+
+    /// Read the payload from a file.
+    ///
+    /// The file is read as raw bytes. One trailing newline (LF or CRLF) is removed
+    /// unless --preserve-newline is set. Cannot be combined with a positional DATA.
+    #[arg(
+        short = 'f',
+        long = "file",
+        value_name = "PATH",
+        conflicts_with = "data"
+    )]
+    pub file: Option<std::path::PathBuf>,
+
+    /// Keep one trailing newline from file or piped input.
+    ///
+    /// By default exactly one trailing newline (LF or CRLF) is stripped from file
+    /// and standard-input payloads; this flag keeps it. A literal DATA argument is
+    /// never stripped.
+    #[arg(short = 'p', long = "preserve-newline")]
+    pub preserve_newline: bool,
+
+    /// Quiet-zone width in modules; 0 removes the margin.
+    ///
+    /// The blank margin drawn around the symbol. The QR specification asks for 4;
+    /// smaller values shrink the output but can make scanning less reliable.
+    #[arg(short = 'b', long = "border", default_value_t = 4)]
+    pub border: u32,
+
+    /// Invert the ink, for light-background terminals.
+    ///
+    /// Modules are drawn in the terminal's foreground color, so the default suits a
+    /// dark background. On a light background the code would appear inverted; pass
+    /// this to keep it dark-on-light and scannable.
+    #[arg(short = 'i', long = "invert")]
+    pub invert: bool,
 }
 
 impl Cli {
@@ -231,35 +283,6 @@ mod tests {
     }
 
     #[test]
-    fn long_flags_resolve() {
-        let cfg = parse(&[
-            "--preserve-newline",
-            "--invert",
-            "--no-compact",
-            "--glyphs",
-            "quadrant",
-            "--error-correction",
-            "Q",
-            "--border",
-            "1",
-            "--max-size",
-            "7",
-            "--chunk",
-            "4",
-            "x",
-        ])
-        .to_config();
-        assert!(cfg.preserve_newline);
-        assert!(cfg.invert);
-        assert_eq!(cfg.mode, RenderMode::Ansi);
-        assert_eq!(cfg.glyphs, GlyphSet::Quadrant);
-        assert_eq!(cfg.ec, Ec::Q);
-        assert_eq!(cfg.border, 1);
-        assert_eq!(cfg.max_size, Some(7));
-        assert_eq!(cfg.min_chunks, Some(4));
-    }
-
-    #[test]
     fn max_size_defaults_to_none() {
         assert_eq!(parse(&["x"]).to_config().max_size, None);
     }
@@ -321,6 +344,35 @@ mod tests {
         render_all(&cfg, &codes, &mut out).unwrap();
         let text = String::from_utf8(out).unwrap();
         assert!(!text.contains("QR "), "{text}");
+    }
+
+    #[test]
+    fn long_flags_resolve() {
+        let cfg = parse(&[
+            "--preserve-newline",
+            "--invert",
+            "--no-compact",
+            "--glyphs",
+            "quadrant",
+            "--error-correction",
+            "Q",
+            "--border",
+            "1",
+            "--max-size",
+            "7",
+            "--chunk",
+            "4",
+            "x",
+        ])
+        .to_config();
+        assert!(cfg.preserve_newline);
+        assert!(cfg.invert);
+        assert_eq!(cfg.mode, RenderMode::Ansi);
+        assert_eq!(cfg.glyphs, GlyphSet::Quadrant);
+        assert_eq!(cfg.ec, Ec::Q);
+        assert_eq!(cfg.border, 1);
+        assert_eq!(cfg.max_size, Some(7));
+        assert_eq!(cfg.min_chunks, Some(4));
     }
 
     #[test]
