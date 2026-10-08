@@ -224,7 +224,7 @@ fn rendered_grid_matches_the_matrix() {
         ("braille", false),
         ("half", true),
     ] {
-        let mut args = vec!["--glyphs", glyph];
+        let mut args = vec!["--glyphs", glyph, "-e", "M"];
         if invert {
             args.push("--invert");
         }

@@ -77,7 +77,7 @@ mod tests {
             input: InputSpec::Literal(text.to_string()),
             ec: Ec::M,
             border: 4,
-            scale: 1,
+            size: 1,
             invert: false,
             glyphs: GlyphSet::Half,
             mode: RenderMode::Compact,

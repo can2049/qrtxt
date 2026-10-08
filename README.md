@@ -67,16 +67,19 @@ Arguments:
   [DATA]                 Literal payload; when omitted, read from --file or stdin
 
 Options:
-  -f, --file <PATH>      Read the payload from a file
-      --preserve-newline Do not strip one trailing newline from piped/file input
-  -e, --error <LEVEL>    Exact error-correction level: L, M, Q, or H [default: M]
-  -b, --border <N>       Quiet-zone width in modules [default: 4]
-  -s, --scale <N>        Terminal module scale [default: 1]
-      --invert           Invert the ink mapping, for light-background terminals
-      --glyphs <SET>     Glyph set: half, quadrant, or braille [default: half]
-      --no-compact       Use ANSI rendering instead of Unicode block characters
-  -h, --help             Print help
-  -V, --version          Print version
+  -f, --file <PATH>       Read the payload from a file
+  -p, --preserve-newline  Do not strip one trailing newline from piped/file input
+                          [alias: --raw]
+  -e, --error <LEVEL>     Exact error-correction level: L, M, Q, or H [default: L]
+                          [alias: --ec]
+  -b, --border <BORDER>   Quiet-zone width in modules [default: 4] [alias: --pad]
+  -s, --size <SIZE>       Terminal module size [default: 1]
+  -i, --invert            Invert the ink mapping, for light-background terminals
+  -g, --glyphs <SET>      Glyph set: half, quadrant, or braille [default: half]
+  -a, --no-compact        Use ANSI rendering instead of Unicode block characters
+                          [alias: --ansi]
+  -h, --help              Print help
+  -V, --version           Print version
 ```
 
 ## Examples
@@ -95,7 +98,7 @@ qrtxt --file payload.txt
 qrtxt --error H "important payload"
 
 # a bigger symbol and a tighter quiet zone
-qrtxt --scale 2 --border 1 "hello"
+qrtxt --size 2 --border 1 "hello"
 
 # denser packing for narrow terminals
 qrtxt --glyphs braille "hello"
@@ -108,11 +111,13 @@ qrtxt --invert "hello"
 
 | `--glyphs` | Modules per cell | Notes |
 |---|---|---|
-| `half`     | 1 × 2            | Default. Most robust across fonts. |
-| `quadrant` | 2 × 2            | Twice the horizontal density. |
-| `braille`  | 2 × 4            | Densest; depends on the font rendering dots tightly. |
+| `half` (h)     | 1 × 2        | Default. Most robust across fonts. |
+| `quadrant` (q) | 2 × 2        | Twice the horizontal density. |
+| `braille` (b)  | 2 × 4        | Densest; depends on the font rendering dots tightly. |
 
-`--scale` (physical size) and `--glyphs` (logical density) are independent knobs.
+Each glyph set also accepts its first letter (`-g h`, `-g q`, `-g b`).
+
+`--size` (physical size) and `--glyphs` (logical density) are independent knobs.
 
 ## Dark and light terminals
 

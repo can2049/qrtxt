@@ -13,9 +13,9 @@ use std::str::FromStr;
 /// bump the symbol to a larger version.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ec {
-    /// Recovers up to ~7% of the symbol.
+    /// Recovers up to ~7% of the symbol (the default).
     L,
-    /// Recovers up to ~15% of the symbol (the default).
+    /// Recovers up to ~15% of the symbol.
     M,
     /// Recovers up to ~25% of the symbol.
     Q,
@@ -52,14 +52,14 @@ pub enum GlyphSet {
 impl FromStr for GlyphSet {
     type Err = String;
 
-    /// Parses a case-insensitive glyph-set name (`"half"`, `"Braille"`, ...).
+    /// Parses a case-insensitive glyph-set name (`"half"`, `"Braille"`, `"b"`, ...).
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_ascii_lowercase().as_str() {
-            "half" => Ok(GlyphSet::Half),
-            "quadrant" => Ok(GlyphSet::Quadrant),
-            "braille" => Ok(GlyphSet::Braille),
+            "half" | "h" => Ok(GlyphSet::Half),
+            "quadrant" | "q" => Ok(GlyphSet::Quadrant),
+            "braille" | "b" => Ok(GlyphSet::Braille),
             _ => Err(format!(
-                "invalid glyph set: {s} (expected half|quadrant|braille)"
+                "invalid glyph set: {s} (expected half|quadrant|braille, or h|q|b)"
             )),
         }
     }
@@ -94,8 +94,8 @@ pub struct Config {
     pub ec: Ec,
     /// Quiet-zone width, in modules.
     pub border: u32,
-    /// Per-module scale factor.
-    pub scale: u32,
+    /// Per-module size factor.
+    pub size: u32,
     /// Invert the ink mapping, for light-background terminals.
     pub invert: bool,
     /// Glyph set used to draw the symbol.
@@ -122,5 +122,12 @@ mod tests {
         assert_eq!("HALF".parse::<GlyphSet>(), Ok(GlyphSet::Half));
         assert_eq!("Braille".parse::<GlyphSet>(), Ok(GlyphSet::Braille));
         assert!("dense".parse::<GlyphSet>().is_err());
+    }
+
+    #[test]
+    fn glyph_set_accepts_initial_letters() {
+        assert_eq!("h".parse::<GlyphSet>(), Ok(GlyphSet::Half));
+        assert_eq!("Q".parse::<GlyphSet>(), Ok(GlyphSet::Quadrant));
+        assert_eq!("b".parse::<GlyphSet>(), Ok(GlyphSet::Braille));
     }
 }

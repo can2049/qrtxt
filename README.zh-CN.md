@@ -66,13 +66,15 @@ qrtxt [OPTIONS] [DATA]
 
 选项:
   -f, --file <PATH>      从文件读取 payload
-      --preserve-newline 不剥除管道/文件输入尾部的单个换行
-  -e, --error <LEVEL>    精确纠错等级: L、M、Q 或 H [默认: M]
-  -b, --border <N>       静默区宽度(模块数)          [默认: 4]
-  -s, --scale <N>        终端模块缩放倍数            [默认: 1]
-      --invert           反转墨色映射,用于浅色背景终端
-      --glyphs <SET>     字形集: half、quadrant 或 braille [默认: half]
-      --no-compact       使用 ANSI 渲染替代 Unicode 块字符
+  -p, --preserve-newline 不剥除管道/文件输入尾部的单个换行
+                         [别名: --raw]
+  -e, --error <LEVEL>    精确纠错等级: L、M、Q 或 H [默认: L]
+                         [别名: --ec]
+  -b, --border <BORDER>  静默区宽度(模块数) [默认: 4] [别名: --pad]
+  -s, --size <SIZE>      终端模块尺寸倍数 [默认: 1]
+  -i, --invert           反转墨色映射,用于浅色背景终端
+  -g, --glyphs <SET>     字形集: half、quadrant 或 braille [默认: half]
+  -a, --no-compact       使用 ANSI 渲染替代 Unicode 块字符 [别名: --ansi]
   -h, --help             打印帮助
   -V, --version          打印版本
 ```
@@ -93,7 +95,7 @@ qrtxt --file payload.txt
 qrtxt --error H "important payload"
 
 # 更大尺寸、更窄静默区
-qrtxt --scale 2 --border 1 "hello"
+qrtxt --size 2 --border 1 "hello"
 
 # 为窄终端选择更高密度
 qrtxt --glyphs braille "hello"
@@ -106,11 +108,13 @@ qrtxt --invert "hello"
 
 | `--glyphs` | 每字符格的模块数 | 说明 |
 |---|---|---|
-| `half`     | 1 × 2            | 默认。跨字体最稳。 |
-| `quadrant` | 2 × 2            | 横向密度翻倍。 |
-| `braille`  | 2 × 4            | 密度最高;依赖字体把点渲染得足够密。 |
+| `half` (h)     | 1 × 2        | 默认。跨字体最稳。 |
+| `quadrant` (q) | 2 × 2        | 横向密度翻倍。 |
+| `braille` (b)  | 2 × 4        | 密度最高;依赖字体把点渲染得足够密。 |
 
-`--scale`(物理大小)与 `--glyphs`(逻辑密度)是两个相互独立的开关。
+每个字形集也接受其首字母(`-g h`、`-g q`、`-g b`)。
+
+`--size`(物理大小)与 `--glyphs`(逻辑密度)是两个相互独立的开关。
 
 ## 深色与浅色终端
 

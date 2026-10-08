@@ -21,10 +21,35 @@ fn ec_level(ec: Ec) -> EcLevel {
 pub fn encode(data: &[u8], ec: Ec) -> Result<QrCode, AppError> {
     QrCode::with_error_correction_level(data, ec_level(ec)).map_err(|error| match error {
         QrError::DataTooLong => {
-            AppError::Input("input cannot be encoded: data too long".to_string())
+            let max = max_fitting_bytes(data, ec);
+            AppError::Input(format!(
+                "input too long: {} bytes (maximum {} bytes at error-correction level {ec:?})",
+                data.len(),
+                max
+            ))
         }
         _ => AppError::Input("input cannot be encoded as a QR code".to_string()),
     })
+}
+
+/// The largest length any single QR symbol can hold (numeric mode, version 40-L).
+const ABSOLUTE_MAX_BYTES: usize = 7089;
+
+/// Largest prefix of `data`, in bytes, that still fits at `ec`.
+///
+/// Bounded by [`ABSOLUTE_MAX_BYTES`] so the search cost does not grow with an
+/// arbitrarily large rejected input.
+fn max_fitting_bytes(data: &[u8], ec: Ec) -> usize {
+    let (mut lo, mut hi) = (0usize, data.len().min(ABSOLUTE_MAX_BYTES));
+    while lo < hi {
+        let mid = lo + (hi - lo).div_ceil(2);
+        if QrCode::with_error_correction_level(&data[..mid], ec_level(ec)).is_ok() {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    lo
 }
 
 #[cfg(test)]
@@ -43,5 +68,22 @@ mod tests {
     fn oversized_input_is_an_input_error() {
         let huge = vec![b'x'; 5000];
         assert!(matches!(encode(&huge, Ec::L), Err(AppError::Input(_))));
+    }
+
+    #[test]
+    fn too_long_error_reports_both_lengths() {
+        let data = vec![b'x'; 4000];
+        let Err(AppError::Input(message)) = encode(&data, Ec::L) else {
+            panic!("expected an input error");
+        };
+        assert!(message.contains("4000"), "{message}");
+        assert!(message.contains("2953"), "{message}");
+        assert!(message.contains('L'), "{message}");
+    }
+
+    #[test]
+    fn byte_limit_at_level_l_is_2953() {
+        assert!(encode(&vec![b'x'; 2953], Ec::L).is_ok());
+        assert!(encode(&vec![b'x'; 2954], Ec::L).is_err());
     }
 }

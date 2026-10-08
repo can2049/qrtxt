@@ -2,7 +2,7 @@
 //!
 //! Rendering is split into two independently testable steps:
 //! 1. [`build_ink`] turns the QR matrix into a [`Frame`] (a boolean ink grid),
-//!    applying quiet zone, scale and inversion.
+//!    applying quiet zone, size and inversion.
 //! 2. [`render`] packs the grid into character cells per glyph set.
 
 use std::io::{self, Write};
@@ -68,14 +68,14 @@ fn round_up(value: usize, multiple: usize) -> usize {
     value.div_ceil(multiple) * multiple
 }
 
-/// Build the ink grid: quiet zone (background), optional scale and inversion,
+/// Build the ink grid: quiet zone (background), optional size and inversion,
 /// padded to a whole number of glyph tiles.
 #[must_use]
-pub fn build_ink(qr: &QrCode, border: u32, scale: u32, invert: bool, glyph: GlyphSet) -> Frame {
+pub fn build_ink(qr: &QrCode, border: u32, size: u32, invert: bool, glyph: GlyphSet) -> Frame {
     let src = qr.width();
     let colors = qr.to_colors();
     let b = border as usize;
-    let s = scale.max(1) as usize;
+    let s = size.max(1) as usize;
     let (tile_w, tile_h) = glyph.tile();
     let inner_w = round_up(src + 2 * b, tile_w);
     let inner_h = round_up(src + 2 * b, tile_h);

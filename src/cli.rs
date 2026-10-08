@@ -25,31 +25,47 @@ pub struct Cli {
     pub file: Option<std::path::PathBuf>,
 
     /// Do not strip one trailing newline from piped or file input.
-    #[arg(long = "preserve-newline")]
+    #[arg(short = 'p', long = "preserve-newline", visible_alias = "raw")]
     pub preserve_newline: bool,
 
     /// Exact error-correction level: L, M, Q, or H.
-    #[arg(short = 'e', long = "error", value_name = "LEVEL", default_value = "M")]
+    #[arg(
+        short = 'e',
+        long = "error",
+        visible_alias = "ec",
+        value_name = "LEVEL",
+        default_value = "L"
+    )]
     pub error: Ec,
 
     /// Quiet-zone width in modules.
-    #[arg(short = 'b', long = "border", default_value_t = 4)]
+    #[arg(
+        short = 'b',
+        long = "border",
+        visible_alias = "pad",
+        default_value_t = 4
+    )]
     pub border: u32,
 
-    /// Terminal module scale.
-    #[arg(short = 's', long = "scale", default_value_t = 1)]
-    pub scale: u32,
+    /// Terminal module size.
+    #[arg(short = 's', long = "size", default_value_t = 1)]
+    pub size: u32,
 
     /// Invert the ink mapping, for light-background terminals.
-    #[arg(long = "invert")]
+    #[arg(short = 'i', long = "invert")]
     pub invert: bool,
 
-    /// Glyph set: half, quadrant, or braille.
-    #[arg(long = "glyphs", value_name = "SET", default_value = "half")]
+    /// Glyph set: half (h), quadrant (q), or braille (b).
+    #[arg(
+        short = 'g',
+        long = "glyphs",
+        value_name = "SET",
+        default_value = "half"
+    )]
     pub glyphs: GlyphSet,
 
     /// Use ANSI rendering instead of Unicode block characters.
-    #[arg(long = "no-compact")]
+    #[arg(short = 'a', long = "no-compact", visible_alias = "ansi")]
     pub no_compact: bool,
 }
 
@@ -66,7 +82,7 @@ impl Cli {
             input,
             ec: self.error,
             border: self.border,
-            scale: self.scale,
+            size: self.size,
             invert: self.invert,
             glyphs: self.glyphs,
             mode: if self.no_compact {
@@ -96,7 +112,7 @@ pub fn run(
 ) -> Result<(), AppError> {
     let payload = crate::input::resolve(cfg, stdin, stdin_is_tty)?;
     let qr = crate::encode::encode(&payload, cfg.ec)?;
-    let frame = crate::render::build_ink(&qr, cfg.border, cfg.scale, cfg.invert, cfg.glyphs);
+    let frame = crate::render::build_ink(&qr, cfg.border, cfg.size, cfg.invert, cfg.glyphs);
 
     let mut writer = std::io::BufWriter::new(stdout);
     let rendered = match cfg.mode {
@@ -171,7 +187,38 @@ mod tests {
         assert!(cfg.invert);
         assert_eq!(cfg.glyphs, GlyphSet::Braille);
         assert_eq!(cfg.border, 4);
-        assert_eq!(cfg.scale, 1);
-        assert_eq!(cfg.ec, Ec::M);
+        assert_eq!(cfg.size, 1);
+        assert_eq!(cfg.ec, Ec::L);
+    }
+
+    #[test]
+    fn short_flags_resolve() {
+        let cfg = parse(&[
+            "-p", "-i", "-a", "-g", "half", "-e", "H", "-b", "2", "-s", "3", "x",
+        ])
+        .to_config();
+        assert!(cfg.preserve_newline);
+        assert!(cfg.invert);
+        assert_eq!(cfg.mode, RenderMode::Ansi);
+        assert_eq!(cfg.glyphs, GlyphSet::Half);
+        assert_eq!(cfg.ec, Ec::H);
+        assert_eq!(cfg.border, 2);
+        assert_eq!(cfg.size, 3);
+    }
+
+    #[test]
+    fn long_aliases_resolve() {
+        let cfg = parse(&[
+            "--raw", "--invert", "--ansi", "--glyphs", "quadrant", "--ec", "Q", "--pad", "1",
+            "--size", "2", "x",
+        ])
+        .to_config();
+        assert!(cfg.preserve_newline);
+        assert!(cfg.invert);
+        assert_eq!(cfg.mode, RenderMode::Ansi);
+        assert_eq!(cfg.glyphs, GlyphSet::Quadrant);
+        assert_eq!(cfg.ec, Ec::Q);
+        assert_eq!(cfg.border, 1);
+        assert_eq!(cfg.size, 2);
     }
 }
