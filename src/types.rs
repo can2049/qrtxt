@@ -94,8 +94,6 @@ pub struct Config {
     pub ec: Ec,
     /// Quiet-zone width, in modules.
     pub border: u32,
-    /// Per-module size factor.
-    pub size: u32,
     /// Invert the ink mapping, for light-background terminals.
     pub invert: bool,
     /// Glyph set used to draw the symbol.

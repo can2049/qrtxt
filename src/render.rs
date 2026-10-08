@@ -68,19 +68,16 @@ fn round_up(value: usize, multiple: usize) -> usize {
     value.div_ceil(multiple) * multiple
 }
 
-/// Build the ink grid: quiet zone (background), optional size and inversion,
-/// padded to a whole number of glyph tiles.
+/// Build the ink grid: quiet zone (background), optional inversion, padded to a
+/// whole number of glyph tiles.
 #[must_use]
-pub fn build_ink(qr: &QrCode, border: u32, size: u32, invert: bool, glyph: GlyphSet) -> Frame {
+pub fn build_ink(qr: &QrCode, border: u32, invert: bool, glyph: GlyphSet) -> Frame {
     let src = qr.width();
     let colors = qr.to_colors();
     let b = border as usize;
-    let s = size.max(1) as usize;
     let (tile_w, tile_h) = glyph.tile();
-    let inner_w = round_up(src + 2 * b, tile_w);
-    let inner_h = round_up(src + 2 * b, tile_h);
-    let width = inner_w * s;
-    let height = inner_h * s;
+    let width = round_up(src + 2 * b, tile_w);
+    let height = round_up(src + 2 * b, tile_h);
 
     // Default: light modules are ink (FR-3.8); `invert` flips it (FR-3.9).
     let is_ink = |color: Color| -> bool {
@@ -89,20 +86,14 @@ pub fn build_ink(qr: &QrCode, border: u32, size: u32, invert: bool, glyph: Glyph
     };
 
     let mut ink = vec![false; width * height];
-    for sy in 0..inner_h {
-        let row_in_matrix = sy >= b && sy < b + src;
-        for sx in 0..inner_w {
-            let value = if row_in_matrix && sx >= b && sx < b + src {
-                is_ink(colors[(sy - b) * src + (sx - b)])
+    for y in 0..height {
+        let row_in_matrix = y >= b && y < b + src;
+        for x in 0..width {
+            ink[y * width + x] = if row_in_matrix && x >= b && x < b + src {
+                is_ink(colors[(y - b) * src + (x - b)])
             } else {
                 false // quiet zone and tile padding stay background
             };
-            for dy in 0..s {
-                let row = (sy * s + dy) * width;
-                for dx in 0..s {
-                    ink[row + sx * s + dx] = value;
-                }
-            }
         }
     }
     Frame::new(width, height, ink)

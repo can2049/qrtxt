@@ -48,10 +48,6 @@ pub struct Cli {
     )]
     pub border: u32,
 
-    /// Terminal module size.
-    #[arg(short = 's', long = "size", default_value_t = 1)]
-    pub size: u32,
-
     /// Invert the ink mapping, for light-background terminals.
     #[arg(short = 'i', long = "invert")]
     pub invert: bool,
@@ -101,7 +97,6 @@ impl Cli {
             input,
             ec: self.error,
             border: self.border,
-            size: self.size,
             invert: self.invert,
             glyphs: self.glyphs,
             mode: if self.no_compact {
@@ -151,7 +146,7 @@ fn render_all(cfg: &Config, codes: &[QrCode], out: &mut dyn std::io::Write) -> s
         if total > 1 {
             writeln!(out, "QR {}/{}", index + 1, total)?;
         }
-        let frame = crate::render::build_ink(qr, cfg.border, cfg.size, cfg.invert, cfg.glyphs);
+        let frame = crate::render::build_ink(qr, cfg.border, cfg.invert, cfg.glyphs);
         match cfg.mode {
             RenderMode::Compact => crate::render::render(&frame, cfg.glyphs, out)?,
             RenderMode::Ansi => crate::render::render_ansi(&frame, out)?,
@@ -222,14 +217,13 @@ mod tests {
         assert!(cfg.invert);
         assert_eq!(cfg.glyphs, GlyphSet::Braille);
         assert_eq!(cfg.border, 4);
-        assert_eq!(cfg.size, 1);
         assert_eq!(cfg.ec, Ec::L);
     }
 
     #[test]
     fn short_flags_resolve() {
         let cfg = parse(&[
-            "-p", "-i", "-a", "-g", "half", "-e", "H", "-b", "2", "-s", "3", "x",
+            "-p", "-i", "-a", "-g", "half", "-e", "H", "-b", "2", "-m", "9", "x",
         ])
         .to_config();
         assert!(cfg.preserve_newline);
@@ -238,14 +232,13 @@ mod tests {
         assert_eq!(cfg.glyphs, GlyphSet::Half);
         assert_eq!(cfg.ec, Ec::H);
         assert_eq!(cfg.border, 2);
-        assert_eq!(cfg.size, 3);
+        assert_eq!(cfg.max_size, Some(9));
     }
 
     #[test]
     fn long_aliases_resolve() {
         let cfg = parse(&[
-            "--raw", "--invert", "--ansi", "--glyphs", "quadrant", "--ec", "Q", "--pad", "1",
-            "--size", "2", "x",
+            "--raw", "--invert", "--ansi", "--glyphs", "quadrant", "--ec", "Q", "--pad", "1", "x",
         ])
         .to_config();
         assert!(cfg.preserve_newline);
@@ -254,7 +247,6 @@ mod tests {
         assert_eq!(cfg.glyphs, GlyphSet::Quadrant);
         assert_eq!(cfg.ec, Ec::Q);
         assert_eq!(cfg.border, 1);
-        assert_eq!(cfg.size, 2);
     }
 
     #[test]
