@@ -1,0 +1,27 @@
+[package]
+name = "qrterm"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Turn text into a QR code rendered in the terminal"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/can2049/qrterm"
+homepage = "https://github.com/can2049/qrterm"
+authors = ["CanWang <canwhut@gmail.com>"]
+keywords = ["cli", "qr", "qrcode", "terminal", "unicode"]
+categories = ["command-line-utilities", "encoding"]
+
+[dependencies]
+clap = { version = "4.6.7", features = ["derive"] }
+qrcode = { version = "0.14.1", default-features = false }
+
+[dev-dependencies]
+assert_cmd = "2.2.2"
+predicates = "3.1.4"
+rqrr = "0.11.0"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
