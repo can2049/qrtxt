@@ -26,26 +26,20 @@ pub struct Cli {
     pub file: Option<std::path::PathBuf>,
 
     /// Do not strip one trailing newline from piped or file input.
-    #[arg(short = 'p', long = "preserve-newline", visible_alias = "raw")]
+    #[arg(short = 'p', long = "preserve-newline")]
     pub preserve_newline: bool,
 
     /// Exact error-correction level: L, M, Q, or H.
     #[arg(
         short = 'e',
-        long = "error",
-        visible_alias = "ec",
+        long = "error-correction",
         value_name = "LEVEL",
         default_value = "L"
     )]
     pub error: Ec,
 
     /// Quiet-zone width in modules.
-    #[arg(
-        short = 'b',
-        long = "border",
-        visible_alias = "pad",
-        default_value_t = 4
-    )]
+    #[arg(short = 'b', long = "border", default_value_t = 4)]
     pub border: u32,
 
     /// Invert the ink mapping, for light-background terminals.
@@ -62,7 +56,7 @@ pub struct Cli {
     pub glyphs: GlyphSet,
 
     /// Use ANSI rendering instead of Unicode block characters.
-    #[arg(short = 'a', long = "no-compact", visible_alias = "ansi")]
+    #[arg(short = 'a', long = "no-compact")]
     pub no_compact: bool,
 
     /// Cap the payload in each QR code at BYTES (implies splitting).
@@ -206,7 +200,7 @@ mod tests {
 
     #[test]
     fn invalid_values_are_rejected() {
-        assert!(Cli::try_parse_from(["qrtxt", "--error", "Z", "x"]).is_err());
+        assert!(Cli::try_parse_from(["qrtxt", "--error-correction", "Z", "x"]).is_err());
         assert!(Cli::try_parse_from(["qrtxt", "--glyphs", "dense", "x"]).is_err());
     }
 
@@ -217,6 +211,7 @@ mod tests {
         assert!(cfg.invert);
         assert_eq!(cfg.glyphs, GlyphSet::Braille);
         assert_eq!(cfg.border, 4);
+        assert_eq!(cfg.max_size, None);
         assert_eq!(cfg.ec, Ec::L);
     }
 
@@ -236,9 +231,22 @@ mod tests {
     }
 
     #[test]
-    fn long_aliases_resolve() {
+    fn long_flags_resolve() {
         let cfg = parse(&[
-            "--raw", "--invert", "--ansi", "--glyphs", "quadrant", "--ec", "Q", "--pad", "1", "x",
+            "--preserve-newline",
+            "--invert",
+            "--no-compact",
+            "--glyphs",
+            "quadrant",
+            "--error-correction",
+            "Q",
+            "--border",
+            "1",
+            "--max-size",
+            "7",
+            "--chunk",
+            "4",
+            "x",
         ])
         .to_config();
         assert!(cfg.preserve_newline);
@@ -247,6 +255,8 @@ mod tests {
         assert_eq!(cfg.glyphs, GlyphSet::Quadrant);
         assert_eq!(cfg.ec, Ec::Q);
         assert_eq!(cfg.border, 1);
+        assert_eq!(cfg.max_size, Some(7));
+        assert_eq!(cfg.min_chunks, Some(4));
     }
 
     #[test]
@@ -311,5 +321,23 @@ mod tests {
         render_all(&cfg, &codes, &mut out).unwrap();
         let text = String::from_utf8(out).unwrap();
         assert!(!text.contains("QR "), "{text}");
+    }
+
+    #[test]
+    fn removed_options_are_rejected() {
+        let cases: [&[&str]; 6] = [
+            &["qrtxt", "--raw", "x"],
+            &["qrtxt", "--ansi", "x"],
+            &["qrtxt", "--ec", "x"],
+            &["qrtxt", "--pad", "x"],
+            &["qrtxt", "--size", "2", "x"],
+            &["qrtxt", "--multi", "x"],
+        ];
+        for args in cases {
+            assert!(
+                Cli::try_parse_from(args).is_err(),
+                "{args:?} should no longer be accepted"
+            );
+        }
     }
 }
