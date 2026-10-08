@@ -3,6 +3,7 @@
 use std::io::{IsTerminal, Write};
 
 use clap::Parser;
+use qrcode::QrCode;
 
 use crate::error::AppError;
 use crate::types::{Config, Ec, GlyphSet, InputSpec, RenderMode};
@@ -67,6 +68,24 @@ pub struct Cli {
     /// Use ANSI rendering instead of Unicode block characters.
     #[arg(short = 'a', long = "no-compact", visible_alias = "ansi")]
     pub no_compact: bool,
+
+    /// Cap the payload in each QR code at BYTES (implies splitting).
+    #[arg(
+        short = 'm',
+        long = "max-size",
+        value_name = "BYTES",
+        value_parser = clap::value_parser!(u32).range(1..)
+    )]
+    pub max_size: Option<u32>,
+
+    /// Split the payload into at least COUNT QR codes when the content allows.
+    #[arg(
+        short = 'c',
+        long = "chunk",
+        value_name = "COUNT",
+        value_parser = clap::value_parser!(u32).range(1..)
+    )]
+    pub chunk: Option<u32>,
 }
 
 impl Cli {
@@ -91,6 +110,8 @@ impl Cli {
                 RenderMode::Compact
             },
             preserve_newline: self.preserve_newline,
+            max_size: self.max_size.map(|bytes| bytes as usize),
+            min_chunks: self.chunk.map(|count| count as usize),
         }
     }
 }
@@ -111,21 +132,35 @@ pub fn run(
     stdin_is_tty: bool,
 ) -> Result<(), AppError> {
     let payload = crate::input::resolve(cfg, stdin, stdin_is_tty)?;
-    let qr = crate::encode::encode(&payload, cfg.ec)?;
-    let frame = crate::render::build_ink(&qr, cfg.border, cfg.size, cfg.invert, cfg.glyphs);
+    let codes = crate::encode::encode_multi(&payload, cfg.ec, cfg.max_size, cfg.min_chunks)?;
 
     let mut writer = std::io::BufWriter::new(stdout);
-    let rendered = match cfg.mode {
-        RenderMode::Compact => crate::render::render(&frame, cfg.glyphs, &mut writer),
-        RenderMode::Ansi => crate::render::render_ansi(&frame, &mut writer),
-    };
-    if let Err(error) = rendered {
+    if let Err(error) = render_all(cfg, &codes, &mut writer) {
         return map_write_error(error);
     }
     match writer.flush() {
         Ok(()) => Ok(()),
         Err(error) => map_write_error(error),
     }
+}
+
+/// Draw every code; when there is more than one, caption each and separate them.
+fn render_all(cfg: &Config, codes: &[QrCode], out: &mut dyn std::io::Write) -> std::io::Result<()> {
+    let total = codes.len();
+    for (index, qr) in codes.iter().enumerate() {
+        if total > 1 {
+            writeln!(out, "QR {}/{}", index + 1, total)?;
+        }
+        let frame = crate::render::build_ink(qr, cfg.border, cfg.size, cfg.invert, cfg.glyphs);
+        match cfg.mode {
+            RenderMode::Compact => crate::render::render(&frame, cfg.glyphs, out)?,
+            RenderMode::Ansi => crate::render::render_ansi(&frame, out)?,
+        }
+        if total > 1 && index + 1 < total {
+            out.write_all(b"\n")?;
+        }
+    }
+    Ok(())
 }
 
 fn map_write_error(error: std::io::Error) -> Result<(), AppError> {
@@ -220,5 +255,69 @@ mod tests {
         assert_eq!(cfg.ec, Ec::Q);
         assert_eq!(cfg.border, 1);
         assert_eq!(cfg.size, 2);
+    }
+
+    #[test]
+    fn max_size_defaults_to_none() {
+        assert_eq!(parse(&["x"]).to_config().max_size, None);
+    }
+
+    #[test]
+    fn max_size_parses_long_and_short() {
+        assert_eq!(
+            parse(&["--max-size", "100", "x"]).to_config().max_size,
+            Some(100)
+        );
+        assert_eq!(parse(&["-m", "100", "x"]).to_config().max_size, Some(100));
+    }
+
+    #[test]
+    fn max_size_zero_is_rejected() {
+        assert!(Cli::try_parse_from(["qrtxt", "--max-size", "0", "x"]).is_err());
+    }
+
+    #[test]
+    fn chunk_defaults_to_none() {
+        assert_eq!(parse(&["x"]).to_config().min_chunks, None);
+    }
+
+    #[test]
+    fn chunk_parses_long_and_short() {
+        assert_eq!(
+            parse(&["--chunk", "3", "x"]).to_config().min_chunks,
+            Some(3)
+        );
+        assert_eq!(parse(&["-c", "3", "x"]).to_config().min_chunks, Some(3));
+    }
+
+    #[test]
+    fn chunk_zero_is_rejected() {
+        assert!(Cli::try_parse_from(["qrtxt", "--chunk", "0", "x"]).is_err());
+    }
+
+    #[test]
+    fn render_all_captions_multiple_codes() {
+        let cfg = parse(&["-e", "L", "x"]).to_config();
+        let codes =
+            crate::encode::encode_multi(&vec![b'x'; 4000], cfg.ec, cfg.max_size, cfg.min_chunks)
+                .unwrap();
+        assert!(codes.len() > 1);
+        let mut out = Vec::new();
+        render_all(&cfg, &codes, &mut out).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("QR 1/"), "{text}");
+        assert!(text.contains(&format!("QR {0}/{0}", codes.len())), "{text}");
+    }
+
+    #[test]
+    fn render_all_leaves_a_single_code_uncaptioned() {
+        let cfg = parse(&["x"]).to_config();
+        let codes =
+            crate::encode::encode_multi(b"hello", cfg.ec, cfg.max_size, cfg.min_chunks).unwrap();
+        assert_eq!(codes.len(), 1);
+        let mut out = Vec::new();
+        render_all(&cfg, &codes, &mut out).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(!text.contains("QR "), "{text}");
     }
 }

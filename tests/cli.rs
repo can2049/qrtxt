@@ -103,17 +103,59 @@ fn border_zero_shrinks_the_output() {
 }
 
 #[test]
-fn oversized_input_exits_two_without_leaking_payload() {
+fn oversized_input_splits_automatically() {
     // Lowercase forces byte mode; 4000 bytes exceeds version 40-L (~2953).
-    let secret = "x".repeat(4000);
-    let output = qrtxt().args(["-e", "L", &secret]).output().unwrap();
-    assert_eq!(output.status.code(), Some(2));
-    let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(!stderr.contains(&secret), "stderr leaked the payload");
-    assert!(
-        !stderr.contains("xxxxxx"),
-        "stderr leaked payload characters"
-    );
+    let payload = "x".repeat(4000);
+    let text = stdout(&["-e", "L", &payload]);
+    assert!(text.contains("QR 1/"), "missing first caption");
+    assert!(text.contains("QR 2/"), "missing second caption");
+}
+
+#[test]
+fn input_within_one_symbol_has_no_caption() {
+    assert!(!stdout(&["hello"]).contains("QR "));
+}
+
+#[test]
+fn max_size_splits_into_smaller_codes() {
+    let payload = "a".repeat(250);
+    let text = stdout(&["-e", "L", "--max-size", "100", &payload]);
+    assert!(text.contains("QR 1/3"), "missing first caption");
+    assert!(text.contains("QR 3/3"), "missing last caption");
+}
+
+#[test]
+fn max_size_above_the_payload_keeps_a_single_code() {
+    assert_eq!(stdout(&["--max-size", "1000", "hello"]), stdout(&["hello"]));
+}
+
+#[test]
+fn max_size_zero_exits_two() {
+    qrtxt()
+        .args(["--max-size", "0", "hello"])
+        .assert()
+        .failure()
+        .code(2);
+}
+
+#[test]
+fn chunk_splits_into_at_least_the_requested_count() {
+    // 100 bytes fit one symbol, but --chunk 4 forces four balanced codes.
+    let payload = "a".repeat(100);
+    let text = stdout(&["-e", "L", "--chunk", "4", &payload]);
+    assert!(text.contains("QR 1/4"), "missing first caption");
+    assert!(text.contains("QR 4/4"), "missing last caption");
+}
+
+#[test]
+fn chunk_short_flag_and_zero_rejection() {
+    let payload = "a".repeat(100);
+    assert!(stdout(&["-c", "4", &payload]).contains("QR 4/4"));
+    qrtxt()
+        .args(["--chunk", "0", "hello"])
+        .assert()
+        .failure()
+        .code(2);
 }
 
 #[test]

@@ -177,6 +177,56 @@ fn round_trip(payload: &str, glyph: &str, invert: bool) -> String {
     decode(width, height, &ink, size, invert)
 }
 
+/// Split a multi-code rendering into its individual code texts, dropping captions.
+fn multi_blocks(text: &str) -> Vec<&str> {
+    text.trim_end_matches('\n')
+        .split("\n\n")
+        .map(|block| block.split_once('\n').expect("caption line").1)
+        .collect()
+}
+
+/// Decode each code block and concatenate the pieces in order.
+fn decode_blocks(text: &str) -> String {
+    let mut assembled = String::new();
+    for block in multi_blocks(text) {
+        let (width, height, ink) = parse(block, "half");
+        let size = symbol_size(width, "half");
+        assembled.push_str(&decode(width, height, &ink, size, false));
+    }
+    assembled
+}
+
+#[test]
+fn split_payload_round_trips_in_order() {
+    // Lowercase forces byte mode: 3000 bytes exceed version 40-L (~2953), so the
+    // payload is emitted as two codes that concatenate back to the original.
+    let payload = "a".repeat(3000);
+    let text = render(&["-e", "L", &payload]);
+    assert!(
+        multi_blocks(&text).len() > 1,
+        "expected the payload to split"
+    );
+    assert_eq!(decode_blocks(&text), payload);
+}
+
+#[test]
+fn max_size_split_round_trips_in_order() {
+    let payload = "a".repeat(3000);
+    let text = render(&["-e", "L", "--max-size", "500", &payload]);
+    let blocks = multi_blocks(&text);
+    assert_eq!(blocks.len(), 6, "3000 bytes at 500 bytes per code");
+    assert_eq!(decode_blocks(&text), payload);
+}
+
+#[test]
+fn chunk_split_round_trips_in_order() {
+    let payload = "a".repeat(2500);
+    let text = render(&["-e", "L", "--chunk", "5", &payload]);
+    let blocks = multi_blocks(&text);
+    assert_eq!(blocks.len(), 5, "--chunk 5 forces five codes");
+    assert_eq!(decode_blocks(&text), payload);
+}
+
 #[test]
 fn half_round_trips() {
     for payload in ["hello", "https://example.com/abc", "0123456789"] {
