@@ -167,3 +167,11 @@ fn version_and_help_are_available() {
         .stdout(predicate::str::contains("qrtxt"));
     qrtxt().arg("--help").assert().success();
 }
+
+#[test]
+fn short_help_documents_the_glyph_letters() {
+    let help = stdout(&["-h"]);
+    assert!(help.contains("half (h"), "{help}");
+    assert!(help.contains("quadrant (q"), "{help}");
+    assert!(help.contains("braille (b"), "{help}");
+}

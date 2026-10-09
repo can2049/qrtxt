@@ -66,7 +66,7 @@ qrtxt [OPTIONS] [DATA]
   [DATA]                 字面量 payload;省略时从 --file 或 stdin 读取
 
 选项:
-  -g, --glyphs <SET>             字形集,决定每个字符格打包多少模块: half (1x2 模块/格,最稳)、quadrant (2x2)、braille (2x4,最密) [默认: half]
+  -g, --glyphs <SET>             字形集,决定每个字符格打包多少模块: half (h;1x2 模块/格,最稳)、quadrant (q;2x2)、braille (b;2x4,最密) [默认: half]
   -e, --error-correction <LEVEL> 纠错等级: L(约可恢复 7%)、M(15%)、Q(25%)、H(30%) [默认: L]
   -m, --max-size <BYTES>         限制每个二维码的负载为 BYTES 字节;会触发拆分(默认: 单个符号自身的上限)
   -c, --chunk <COUNT>            把负载拆分成至少 COUNT 个二维码;引导性(默认: 无下限)

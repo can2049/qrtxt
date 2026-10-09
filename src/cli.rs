@@ -30,11 +30,11 @@ pub struct Cli {
     #[arg(value_name = "DATA")]
     pub data: Option<String>,
 
-    /// Glyph set used to pack modules into character cells: half (1x2 modules per
-    /// cell; most robust), quadrant (2x2), or braille (2x4; densest).
+    /// Glyph set used to pack modules into character cells: half (h; 1x2 modules
+    /// per cell, most robust), quadrant (q; 2x2), or braille (b; 2x4, densest).
     ///
-    /// Each set also accepts its first letter (h, q, b). Braille needs a font that
-    /// renders dots tightly.
+    /// Each set also accepts its initial letter (e.g. `-g b`). Braille needs a font
+    /// that renders dots tightly.
     #[arg(
         short = 'g',
         long = "glyphs",

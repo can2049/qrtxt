@@ -70,7 +70,7 @@ Arguments:
   [DATA]                 Literal payload to encode
 
 Options:
-  -g, --glyphs <SET>              Glyph set used to pack modules into character cells: half (1x2 modules per cell; most robust), quadrant (2x2), or braille (2x4; densest) [default: half]
+  -g, --glyphs <SET>              Glyph set used to pack modules into character cells: half (h; 1x2 modules per cell, most robust), quadrant (q; 2x2), or braille (b; 2x4, densest) [default: half]
   -e, --error-correction <LEVEL>  Error-correction level: L (about 7% recoverable), M (15%), Q (25%), or H (30%) [default: L]
   -m, --max-size <BYTES>          Cap the payload of each QR code at BYTES bytes; implies splitting (default: the symbol's own limit)
   -c, --chunk <COUNT>             Split the payload across at least COUNT QR codes; advisory (default: no minimum)
