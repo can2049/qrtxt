@@ -20,7 +20,8 @@ more QR codes drawn with Unicode block characters, so no graphics environment is
 just a UTF-8 terminal.\n\n\
 A payload too large for a single symbol is split automatically across several balanced codes, \
 printed in order under a `QR i/N` caption. Use --max-size to cap the bytes per code, or \
---chunk to require a minimum number of codes."
+--chunk to require a minimum number of codes.",
+    after_help = "Source: https://github.com/can2049/qrtxt"
 )]
 pub struct Cli {
     /// Literal payload to encode.

@@ -81,6 +81,8 @@ Options:
   -i, --invert                    Invert the ink, for light-background terminals
   -h, --help                      Print help (see more with '--help')
   -V, --version                   Print version
+
+Source: https://github.com/can2049/qrtxt
 ```
 
 Run `qrtxt --help` for a full description of every option and the effect of its

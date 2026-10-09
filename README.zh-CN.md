@@ -77,6 +77,8 @@ qrtxt [OPTIONS] [DATA]
   -i, --invert                   反转墨色,用于浅色背景终端
   -h, --help                     打印帮助(用 '--help' 查看更详细说明)
   -V, --version                  打印版本
+
+Source: https://github.com/can2049/qrtxt
 ```
 
 运行 `qrtxt --help` 可查看每个选项的完整说明及其参数的作用(`-h` 只打印简要摘要)。

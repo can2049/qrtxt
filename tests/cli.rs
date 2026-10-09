@@ -175,3 +175,9 @@ fn short_help_documents_the_glyph_letters() {
     assert!(help.contains("quadrant (q"), "{help}");
     assert!(help.contains("braille (b"), "{help}");
 }
+
+#[test]
+fn short_help_advertises_the_source_url() {
+    let help = stdout(&["-h"]);
+    assert!(help.contains("https://github.com/can2049/qrtxt"), "{help}");
+}
