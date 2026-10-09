@@ -95,6 +95,17 @@ pub struct Cli {
     #[arg(short = 'a', long = "no-compact")]
     pub no_compact: bool,
 
+    /// Render as a bitmap with the Kitty graphics protocol instead of Unicode
+    /// block characters.
+    ///
+    /// Requires a terminal that implements the protocol (for example kitty,
+    /// Ghostty, or WezTerm). qrtxt probes the terminal with an `a=q` handshake
+    /// and, if it is unsupported (or standard output is not a terminal), fails
+    /// with a usage error rather than print unusable escape bytes. The glyph set
+    /// is ignored; `--invert` swaps the two colours.
+    #[arg(short = 'k', long = "kitty", conflicts_with = "no_compact")]
+    pub kitty: bool,
+
     /// Read the payload from a file.
     ///
     /// The file is read as raw bytes. One trailing newline (LF or CRLF) is removed
@@ -146,7 +157,9 @@ impl Cli {
             border: self.border,
             invert: self.invert,
             glyphs: self.glyphs,
-            mode: if self.no_compact {
+            mode: if self.kitty {
+                RenderMode::Kitty
+            } else if self.no_compact {
                 RenderMode::Ansi
             } else {
                 RenderMode::Compact
@@ -160,10 +173,14 @@ impl Cli {
 
 /// Default entry point: reads global stdin/stdout and TTY state.
 pub fn run_with(cli: &Cli) -> Result<(), AppError> {
+    let cfg = cli.to_config();
+    if cfg.mode == RenderMode::Kitty {
+        ensure_kitty_supported()?;
+    }
     let mut stdin = std::io::stdin().lock();
     let mut stdout = std::io::stdout().lock();
     let stdin_is_tty = std::io::stdin().is_terminal();
-    run(&cli.to_config(), &mut stdin, &mut stdout, stdin_is_tty)
+    run(&cfg, &mut stdin, &mut stdout, stdin_is_tty)
 }
 
 /// Orchestrate input -> encode -> render. All side effects live here.
@@ -186,6 +203,12 @@ pub fn run(
     }
 }
 
+/// First image id handed to the transmitted bitmaps (FR-3.12).
+///
+/// Each code takes the next id. The Kitty protocol replaces an image stored under
+/// a repeated id, so sharing one id would leave only the last code visible.
+const KITTY_IMAGE_ID_BASE: u32 = 424_242;
+
 /// Draw every code; when there is more than one, caption each and separate them.
 fn render_all(cfg: &Config, codes: &[QrCode], out: &mut dyn std::io::Write) -> std::io::Result<()> {
     let total = codes.len();
@@ -193,16 +216,124 @@ fn render_all(cfg: &Config, codes: &[QrCode], out: &mut dyn std::io::Write) -> s
         if total > 1 {
             writeln!(out, "QR {}/{}", index + 1, total)?;
         }
-        let frame = crate::render::build_ink(qr, cfg.border, cfg.invert, cfg.glyphs);
         match cfg.mode {
-            RenderMode::Compact => crate::render::render(&frame, cfg.glyphs, out)?,
-            RenderMode::Ansi => crate::render::render_ansi(&frame, out)?,
+            RenderMode::Kitty => {
+                let id = KITTY_IMAGE_ID_BASE.wrapping_add(index as u32);
+                crate::render::render_kitty(qr, cfg.border, cfg.invert, id, out)?;
+            }
+            RenderMode::Compact => {
+                let frame = crate::render::build_ink(qr, cfg.border, cfg.invert, cfg.glyphs);
+                crate::render::render(&frame, cfg.glyphs, out)?;
+            }
+            RenderMode::Ansi => {
+                let frame = crate::render::build_ink(qr, cfg.border, cfg.invert, cfg.glyphs);
+                crate::render::render_ansi(&frame, out)?;
+            }
         }
         if total > 1 && index + 1 < total {
             out.write_all(b"\n")?;
         }
     }
     Ok(())
+}
+
+/// Image id used for the capability probe, kept well clear of the display range.
+const KITTY_PROBE_ID: u32 = 1_000_000;
+
+/// Ensure the current terminal implements the Kitty graphics protocol (FR-3.12).
+///
+/// The probe runs an `a=q` handshake over the controlling terminal, so the reply
+/// is read without disturbing the payload stream (which may arrive on stdin). A
+/// terminal that cannot draw the bitmap is a hard error: printing escape bytes it
+/// cannot interpret would only spew garbage.
+fn ensure_kitty_supported() -> Result<(), AppError> {
+    if !std::io::stdout().is_terminal() {
+        return Err(AppError::Usage(
+            "kitty: standard output is not a terminal".to_string(),
+        ));
+    }
+    let mut tty = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/tty")
+        .map_err(|source| AppError::Io {
+            context: "kitty: cannot open the controlling terminal",
+            source,
+        })?;
+    match probe_kitty(&mut tty) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(AppError::Usage(
+            "kitty: this terminal does not support the Kitty graphics protocol \
+             (try kitty, Ghostty, or WezTerm)"
+                .to_string(),
+        )),
+        Err(source) => Err(AppError::Io {
+            context: "kitty: cannot query the terminal",
+            source,
+        }),
+    }
+}
+
+/// Send the support query and read the reply in raw mode, with a short timeout.
+fn probe_kitty(tty: &mut std::fs::File) -> std::io::Result<bool> {
+    use std::io::Read as _;
+    use std::os::fd::AsFd as _;
+    use std::time::{Duration, Instant};
+
+    use rustix::termios::{OptionalActions, SpecialCodeIndex, tcgetattr, tcsetattr};
+
+    let original = tcgetattr(tty.as_fd())?;
+    // A duplicate handle restores the attributes on the way out without holding a
+    // borrow of `tty`, which stays free for reading and writing.
+    let _guard = TermiosGuard {
+        tty: tty.try_clone()?,
+        original: original.clone(),
+    };
+
+    let mut raw = original;
+    raw.make_raw();
+    raw.special_codes[SpecialCodeIndex::VMIN] = 0;
+    raw.special_codes[SpecialCodeIndex::VTIME] = 1; // 0.1s between reads
+    tcsetattr(tty.as_fd(), OptionalActions::Now, &raw)?;
+
+    tty.write_all(&crate::kitty::query(KITTY_PROBE_ID))?;
+    tty.flush()?;
+
+    let deadline = Instant::now() + Duration::from_millis(300);
+    let mut response = Vec::new();
+    let mut byte = [0u8; 1];
+    while Instant::now() < deadline {
+        match tty.read(&mut byte) {
+            Ok(0) => {} // the read timed out with no data
+            Ok(_) => {
+                response.push(byte[0]);
+                if response.ends_with(b"\x1b\\") {
+                    break;
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(crate::kitty::response_ok(&response))
+}
+
+/// Restores the terminal's saved attributes when dropped, even on early return.
+struct TermiosGuard {
+    tty: std::fs::File,
+    original: rustix::termios::Termios,
+}
+
+impl Drop for TermiosGuard {
+    fn drop(&mut self) {
+        use std::os::fd::AsFd as _;
+
+        let _ = rustix::termios::tcsetattr(
+            self.tty.as_fd(),
+            rustix::termios::OptionalActions::Now,
+            &self.original,
+        );
+    }
 }
 
 fn map_write_error(error: std::io::Error) -> Result<(), AppError> {
@@ -348,6 +479,36 @@ mod tests {
     }
 
     #[test]
+    fn render_all_kitty_uses_a_distinct_image_id_per_code() {
+        // Reusing one image id would make the terminal replace earlier codes, so
+        // every transmitted bitmap must carry its own id.
+        let cfg = parse(&["-k", "-e", "L", "x"]).to_config();
+        let codes =
+            crate::encode::encode_multi(&vec![b'x'; 4000], cfg.ec, cfg.max_size, cfg.min_chunks)
+                .unwrap();
+        assert!(codes.len() > 1, "payload should split");
+        let mut out = Vec::new();
+        render_all(&cfg, &codes, &mut out).unwrap();
+        let text = String::from_utf8(out).unwrap();
+
+        // Only the first chunk of each image carries the control block with `i=`.
+        let ids: Vec<&str> = text
+            .match_indices(",i=")
+            .map(|(start, _)| {
+                let rest = &text[start + 3..];
+                &rest[..rest.find(',').expect("id is followed by another control key")]
+            })
+            .collect();
+        assert_eq!(ids.len(), codes.len(), "one image id per code: {ids:?}");
+        let unique: std::collections::BTreeSet<&str> = ids.iter().copied().collect();
+        assert_eq!(
+            unique.len(),
+            codes.len(),
+            "image ids must be distinct: {ids:?}"
+        );
+    }
+
+    #[test]
     fn long_flags_resolve() {
         let cfg = parse(&[
             "--preserve-newline",
@@ -392,5 +553,17 @@ mod tests {
                 "{args:?} should no longer be accepted"
             );
         }
+    }
+
+    #[test]
+    fn kitty_flag_selects_kitty_mode() {
+        assert_eq!(parse(&["--kitty", "x"]).to_config().mode, RenderMode::Kitty);
+        assert_eq!(parse(&["-k", "x"]).to_config().mode, RenderMode::Kitty);
+        assert_ne!(parse(&["x"]).to_config().mode, RenderMode::Kitty);
+    }
+
+    #[test]
+    fn kitty_conflicts_with_no_compact() {
+        assert!(Cli::try_parse_from(["qrtxt", "--kitty", "--no-compact", "x"]).is_err());
     }
 }

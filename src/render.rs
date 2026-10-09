@@ -217,6 +217,72 @@ pub fn render_ansi(frame: &Frame, out: &mut dyn Write) -> io::Result<()> {
     Ok(())
 }
 
+/// Target rendered size, in pixels; the per-module scale is derived from it.
+const KITTY_TARGET_PX: usize = 600;
+/// Bounds on the pixels-per-module scale.
+const KITTY_MIN_MODULE_PX: usize = 2;
+const KITTY_MAX_MODULE_PX: usize = 16;
+
+/// Render `qr` as a black-and-white bitmap through the Kitty graphics protocol
+/// (FR-3.12).
+///
+/// A square RGB image is scaled so every module is a crisp block of pixels, with
+/// the quiet zone drawn in the light colour. `invert` swaps the two colours.
+///
+/// `id` is the protocol image id. Each transmission must use a fresh id: with
+/// `a=T` the terminal replaces any image already stored under the same id and
+/// drops its placements, so reusing one id would erase earlier codes instead of
+/// showing them side by side.
+pub fn render_kitty(
+    qr: &QrCode,
+    border: u32,
+    invert: bool,
+    id: u32,
+    out: &mut dyn Write,
+) -> io::Result<()> {
+    let src = qr.width();
+    let colors = qr.to_colors();
+    let b = border as usize;
+    let side = src + 2 * b;
+    let module_px = (KITTY_TARGET_PX / side).clamp(KITTY_MIN_MODULE_PX, KITTY_MAX_MODULE_PX);
+    let image_px = side * module_px;
+
+    // Default: dark modules are black on a white field (FR-3.8); `invert` swaps
+    // the two colours (FR-3.9).
+    let (dark, light) = if invert {
+        ([255, 255, 255], [0, 0, 0])
+    } else {
+        ([0, 0, 0], [255, 255, 255])
+    };
+
+    let mut rgb = vec![0u8; image_px * image_px * 3];
+    for y in 0..image_px {
+        let module_y = y / module_px;
+        for x in 0..image_px {
+            let module_x = x / module_px;
+            let is_dark = module_x >= b
+                && module_x < b + src
+                && module_y >= b
+                && module_y < b + src
+                && matches!(colors[(module_y - b) * src + (module_x - b)], Color::Dark);
+            let colour = if is_dark { dark } else { light };
+            let offset = (y * image_px + x) * 3;
+            rgb[offset..offset + 3].copy_from_slice(&colour);
+        }
+    }
+
+    crate::kitty::transmit_rgb(&rgb, image_px, image_px, id, out)?;
+    out.write_all(b"\n")
+}
+
+/// Decode a rendered Kitty sequence's first chunk payload (test helper).
+#[cfg(test)]
+fn first_payload(text: &str) -> &str {
+    let start = text.find(';').expect("control separator") + 1;
+    let end = start + text[start..].find('\x1b').expect("payload terminator");
+    &text[start..end]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -224,6 +290,39 @@ mod tests {
     /// A 2x2 ink grid: top-left and bottom-right are ink.
     fn sample() -> Frame {
         Frame::new(2, 2, vec![true, false, false, true])
+    }
+
+    #[test]
+    fn kitty_bitmap_is_square_with_light_quiet_zone() {
+        let qr = QrCode::new(b"hello").unwrap();
+        let side = qr.width() + 2 * 4;
+        let module_px = (KITTY_TARGET_PX / side).clamp(KITTY_MIN_MODULE_PX, KITTY_MAX_MODULE_PX);
+        let image_px = side * module_px;
+
+        let mut out = Vec::new();
+        render_kitty(&qr, 4, false, 424_242, &mut out).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.starts_with("\x1b_G"), "missing APC introducer");
+        // The image spans many chunks, so the first chunk carries the full control
+        // block and sets `m=1` (more to come).
+        assert!(
+            text.contains(&format!(
+                "a=T,f=24,s={image_px},v={image_px},i=424242,m=1;"
+            )),
+            "missing or incorrect first-chunk control block"
+        );
+        // The top-left pixel is the quiet zone, drawn light (white) by default.
+        assert!(first_payload(&text).starts_with("////"), "quiet zone is not white");
+    }
+
+    #[test]
+    fn kitty_invert_swaps_the_quiet_zone_pixel() {
+        let qr = QrCode::new(b"hello").unwrap();
+        let mut out = Vec::new();
+        render_kitty(&qr, 4, true, 7, &mut out).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        // Inverted: the light quiet zone becomes black.
+        assert!(first_payload(&text).starts_with("AAAA"), "quiet zone is not black");
     }
 
     #[test]

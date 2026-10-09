@@ -72,6 +72,8 @@ pub enum RenderMode {
     Compact,
     /// ANSI escape-code rendering.
     Ansi,
+    /// Bitmap rendering via the Kitty graphics protocol (FR-3.12).
+    Kitty,
 }
 
 /// Where the payload is read from.

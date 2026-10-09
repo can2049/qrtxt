@@ -181,3 +181,29 @@ fn short_help_advertises_the_source_url() {
     let help = stdout(&["-h"]);
     assert!(help.contains("https://github.com/can2049/qrtxt"), "{help}");
 }
+
+#[test]
+fn kitty_requires_a_terminal() {
+    // Under the test harness stdout is a pipe, so the guard fires before any probe.
+    qrtxt()
+        .args(["--kitty", "hello"])
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("not a terminal"));
+}
+
+#[test]
+fn kitty_conflicts_with_no_compact() {
+    qrtxt()
+        .args(["--kitty", "--no-compact", "hello"])
+        .assert()
+        .failure()
+        .code(2);
+}
+
+#[test]
+fn short_help_lists_the_kitty_option() {
+    let help = stdout(&["-h"]);
+    assert!(help.contains("--kitty"), "{help}");
+}
