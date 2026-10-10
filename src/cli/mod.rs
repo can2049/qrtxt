@@ -1,6 +1,6 @@
 //! Command-line interface: argument parsing (`Cli`) and orchestration (`run`).
 //!
-//! All argument parsing lives here; the Kitty capability probe lives in
+//! All argument parsing lives here; the graphics capability probes live in
 //! [`probe`] and the `--help` hint plumbing in [`help`]. Their public items are
 //! re-exported below so callers keep using the `cli::` path.
 
@@ -15,7 +15,7 @@ use crate::types::{Config, Ec, GlyphSet, InputSpec, RenderMode};
 mod help;
 mod probe;
 
-pub use help::{command_with_kitty_hint, kitty_support_hint};
+pub use help::{add_kitty_hint, add_sixel_hint, kitty_support_hint, sixel_support_hint};
 
 /// Turn text into a terminal QR code.
 #[derive(Debug, Parser)]
@@ -116,6 +116,17 @@ pub struct Cli {
     #[arg(short = 'k', long = "kitty", conflicts_with = "no_compact")]
     pub kitty: bool,
 
+    /// Draw a smaller QR as a bitmap through the Sixel graphics protocol.
+    ///
+    /// Like --kitty, a bitmap is not limited by the font, so every module stays
+    /// crisp. It needs a terminal that implements the protocol — xterm, Konsole,
+    /// foot, or Windows Terminal, for example. qrtxt probes the terminal with a
+    /// device-attributes query and, if it is unsupported (or standard output is
+    /// not a terminal), fails with a usage error rather than print unusable
+    /// escape bytes. The glyph set is ignored; `--invert` swaps the two colours.
+    #[arg(short = 's', long = "sixel", conflicts_with_all = ["no_compact", "kitty"])]
+    pub sixel: bool,
+
     /// Read the payload from a file.
     ///
     /// The file is read as raw bytes. One trailing newline (LF or CRLF) is removed
@@ -169,6 +180,8 @@ impl Cli {
             glyphs: self.glyphs,
             mode: if self.kitty {
                 RenderMode::Kitty
+            } else if self.sixel {
+                RenderMode::Sixel
             } else if self.no_compact {
                 RenderMode::Ansi
             } else {
@@ -184,8 +197,10 @@ impl Cli {
 /// Default entry point: reads global stdin/stdout and TTY state.
 pub fn run_with(cli: &Cli) -> Result<(), AppError> {
     let cfg = cli.to_config();
-    if cfg.mode == RenderMode::Kitty {
-        probe::ensure_kitty_supported()?;
+    match cfg.mode {
+        RenderMode::Kitty => probe::ensure_kitty_supported()?,
+        RenderMode::Sixel => probe::ensure_sixel_supported()?,
+        _ => {}
     }
     let mut stdin = std::io::stdin().lock();
     let mut stdout = std::io::stdout().lock();
@@ -230,6 +245,9 @@ fn render_all(cfg: &Config, codes: &[QrCode], out: &mut dyn std::io::Write) -> s
             RenderMode::Kitty => {
                 let id = KITTY_IMAGE_ID_BASE.wrapping_add(index as u32);
                 crate::render::render_kitty(qr, cfg.border, cfg.invert, id, out)?;
+            }
+            RenderMode::Sixel => {
+                crate::render::render_sixel(qr, cfg.border, cfg.invert, out)?;
             }
             RenderMode::Compact => {
                 let frame = crate::render::build_ink(qr, cfg.border, cfg.invert, cfg.glyphs);
@@ -510,5 +528,33 @@ mod tests {
     #[test]
     fn kitty_conflicts_with_no_compact() {
         assert!(Cli::try_parse_from(["qrtxt", "--kitty", "--no-compact", "x"]).is_err());
+    }
+
+    #[test]
+    fn sixel_flag_selects_sixel_mode() {
+        assert_eq!(parse(&["--sixel", "x"]).to_config().mode, RenderMode::Sixel);
+        assert_eq!(parse(&["-s", "x"]).to_config().mode, RenderMode::Sixel);
+        assert_ne!(parse(&["x"]).to_config().mode, RenderMode::Sixel);
+    }
+
+    #[test]
+    fn sixel_conflicts_with_kitty_and_no_compact() {
+        assert!(Cli::try_parse_from(["qrtxt", "--sixel", "--kitty", "x"]).is_err());
+        assert!(Cli::try_parse_from(["qrtxt", "--sixel", "--no-compact", "x"]).is_err());
+    }
+
+    #[test]
+    fn render_all_sixel_renders_one_sequence_per_code() {
+        let cfg = parse(&["--sixel", "-e", "L", "x"]).to_config();
+        let codes =
+            crate::encode::encode_multi(&vec![b'x'; 6000], cfg.ec, cfg.max_bytes, cfg.min_chunks)
+                .unwrap();
+        assert!(codes.len() >= 3, "payload should split into several codes");
+
+        let mut out = Vec::new();
+        render_all(&cfg, &codes, &mut out).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        // One Sixel sequence (DCS introducer) per code; nothing skipped or doubled.
+        assert_eq!(text.matches("\x1bPq").count(), codes.len());
     }
 }

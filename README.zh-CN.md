@@ -35,6 +35,7 @@ $ qrtxt "hi"
 - **三种字形集** —— 半块(默认)、象限块、盲文点阵,在可扫性与屏幕密度之间取舍。
 - **ANSI 渲染** —— `--no-compact`,用于不支持块字符的终端。
 - **位图渲染** —— `--kitty` 通过 Kitty 图形协议绘制清晰的黑白位图,可比块字符渲染更小(kitty、Ghostty、WezTerm);不支持的终端会快速报错,而不是打印乱码。
+- **Sixel 渲染** —— `--sixel` 通过 Sixel 图形协议绘制同样的位图,覆盖另一批终端(xterm、Konsole、foot、Windows Terminal 等);不支持的终端会快速报错,而不是打印乱码。
 - **深色/浅色终端** —— `--invert` 适配浅色背景。
 - **超长内容** —— 放不进单个二维码的内容会自动均分成多个二维码;`--max-bytes` 可限制每个二维码的字节数,`--chunk` 可指定二维码数量的下限。
 - **默认安全** —— 无 `unsafe` 代码,错误信息绝不回显 payload。
@@ -80,6 +81,7 @@ qrtxt [OPTIONS] [DATA]
   -c, --chunk <COUNT>            把负载拆分成至少 COUNT 个二维码;引导性(默认: 无下限)
   -a, --no-compact               用 ANSI 转义序列渲染,替代 Unicode 块字符
   -k, --kitty                    通过 Kitty 图形协议把二维码画成更小的位图
+  -s, --sixel                    通过 Sixel 图形协议把二维码画成更小的位图
   -f, --file <PATH>              从文件读取 payload
   -p, --preserve-newline         保留文件/管道输入尾部的一个换行
   -b, --border <BORDER>          静默区宽度(模块数);0 表示去掉留白 [默认: 4]
@@ -115,6 +117,9 @@ qrtxt --glyphs braille "hello"
 
 # 清晰的黑白位图(需要支持 Kitty 协议的终端)
 qrtxt --kitty "https://example.com"
+
+# 清晰的黑白位图(需要支持 Sixel 协议的终端)
+qrtxt --sixel "https://example.com"
 
 # 浅色背景终端
 qrtxt --invert "hello"
@@ -154,6 +159,22 @@ qrtxt --chunk 4 "a-short-but-verifiable-payload"
 `--help` 也会执行同一次探测:当标准输出是终端时,`--kitty` 选项说明末尾会附上当前
 终端是否支持的一行结论。
 
+## Sixel 图形协议
+
+`--sixel`(`-s`)绘制与 `--kitty` 相同的黑白位图,但走较老的
+[Sixel 图形格式](https://en.wikipedia.org/wiki/Sixel)。两者覆盖不同的终端:Sixel 触达
+xterm、Konsole、foot、mlterm、iTerm2、Windows Terminal(1.22+)——这些终端不实现
+Kitty 协议;而 kitty、Ghostty 实现 Kitty 却不支持 Sixel。由于二维码只有两种颜色,
+Sixel 输出仅用两个调色板寄存器 + 游程编码,因此非常紧凑。
+
+Sixel 的支持探测比 Kitty 弱:它没有握手,`qrtxt` 会发送一次主设备属性查询(DA1),
+只有广告支持 Sixel(设备属性 `4`)的终端才被接受;支持但不广告的终端按"不支持"处理,
+因此绝不会输出终端画不出来的转义字节。与 `--kitty` 一样,输出为纯黑白并自带白色静默区,
+`--invert` 交换两种颜色,字形集选项被忽略;`--help` 探测同样会给 `--sixel` 末尾附上结论。
+
+图像会声明方形像素,因此在遵守光栅属性的终端上模块保持方正——但 Sixel 渲染尚未在所有
+终端上目视验证,请确认打印出来的二维码仍可扫。
+
 ## 超长内容
 
 单个二维码能容纳的数据有上限(`L` 级约 2953 字节,级别越高越少)。放不下时,`qrtxt`
@@ -191,13 +212,13 @@ argv / stdin -> input::resolve -> encode::encode_multi -> render::build_ink -> r
 
 - `cli` 负责参数解析与流程编排(`run` / `run_with`)。
 - `input`、`encode`、`render` 是纯逻辑,不依赖 `clap`。
-- `kitty` 存放底层协议封帧,供 `cli`(终端探测)与 `render`(位图传输)共用。
+- `kitty` 与 `sixel` 存放底层协议封帧,供 `cli`(终端探测)与 `render`(位图传输)共用。
 - `types` 存放共享值类型;`error` 把失败映射为退出码。
 
 渲染分两步:`build_ink` 把二维码矩阵转成布尔“墨色”网格(施加静默区、反相),
-`render` 再按字形集把网格打包成字符。`render_kitty` 跳过该网格,直接通过 Kitty 协议
-输出黑白位图。round-trip 测试会先把输出还原成模块网格、再用 `rqrr` 解码,以证明打印
-出来的东西仍然可扫。
+`render` 再按字形集把网格打包成字符。`render_kitty` 与 `render_sixel` 跳过该网格,
+直接通过 Kitty 或 Sixel 协议输出黑白位图。round-trip 测试会先把输出还原成模块网格、
+再用 `rqrr` 解码,以证明打印出来的东西仍然可扫。
 
 ## 许可
 

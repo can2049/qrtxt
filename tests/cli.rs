@@ -206,7 +206,38 @@ fn kitty_conflicts_with_no_compact() {
 }
 
 #[test]
+fn sixel_requires_a_terminal() {
+    // Under the test harness stdout is a pipe, so the guard fires before any probe.
+    qrtxt()
+        .args(["--sixel", "hello"])
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("not a terminal"));
+}
+
+#[test]
+fn sixel_conflicts_with_kitty_and_no_compact() {
+    qrtxt()
+        .args(["--sixel", "--kitty", "hello"])
+        .assert()
+        .failure()
+        .code(2);
+    qrtxt()
+        .args(["--sixel", "--no-compact", "hello"])
+        .assert()
+        .failure()
+        .code(2);
+}
+
+#[test]
 fn short_help_lists_the_kitty_option() {
     let help = stdout(&["-h"]);
     assert!(help.contains("--kitty"), "{help}");
+}
+
+#[test]
+fn short_help_lists_the_sixel_option() {
+    let help = stdout(&["-h"]);
+    assert!(help.contains("--sixel"), "{help}");
 }

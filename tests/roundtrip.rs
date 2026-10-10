@@ -552,3 +552,197 @@ fn kitty_multi_code_round_trips() {
     }
     assert_eq!(assembled, payload, "codes did not reassemble in order");
 }
+
+/// Read an unsigned decimal number starting at `start`; returns the value and the
+/// index just past its digits.
+fn read_number(bytes: &[u8], start: usize) -> (u32, usize) {
+    let mut value = 0u32;
+    let mut index = start;
+    while index < bytes.len() && bytes[index].is_ascii_digit() {
+        value = value * 10 + u32::from(bytes[index] - b'0');
+        index += 1;
+    }
+    (value, index)
+}
+
+/// Paint one sixel run into the per-pixel "is black" bitmap.
+fn paint_band(
+    black: &mut [bool],
+    width: usize,
+    x: usize,
+    y: usize,
+    count: usize,
+    mask: u8,
+    colour: [u8; 3],
+) {
+    let is_black = colour == [0, 0, 0];
+    for rep in 0..count {
+        let column = x + rep;
+        for bit in 0..6u8 {
+            if mask & (1 << bit) != 0 {
+                black[(y + usize::from(bit)) * width + column] = is_black;
+            }
+        }
+    }
+}
+
+/// Decode a `render_sixel` sequence into a per-pixel "is black" bitmap.
+///
+/// Handles the subset the encoder emits: the raster attributes, two palette
+/// registers, data characters, RLE (`!`), carriage return (`$`) and graphics
+/// newline (`-`).
+fn parse_sixel_pixels(buf: &[u8]) -> (usize, usize, Vec<bool>) {
+    let start = find_subslice(buf, b"\x1bP").expect("DCS introducer") + 2;
+    let selector = start
+        + buf[start..]
+            .iter()
+            .position(|&b| b == b'q')
+            .expect("sixel selector");
+    let end = find_subslice(buf, b"\x1b\\").expect("string terminator");
+    let body = &buf[selector + 1..end];
+
+    let mut palette = [[0u8; 3]; 256];
+    let mut width = 0usize;
+    let mut height = 0usize;
+    let mut black = Vec::new();
+    let mut x = 0usize;
+    let mut y = 0usize;
+    let mut register = 0usize;
+
+    let mut index = 0;
+    while index < body.len() {
+        match body[index] {
+            b'#' => {
+                let (number, next) = read_number(body, index + 1);
+                if body.get(next) == Some(&b';') {
+                    // Palette definition: `#Pc;2;Pr;Pg;Pb`.
+                    let (_, p) = read_number(body, next + 1); // Pu = 2
+                    let (r, p) = read_number(body, p + 1);
+                    let (g, p) = read_number(body, p + 1);
+                    let (b, p) = read_number(body, p + 1);
+                    palette[number as usize] = [r as u8, g as u8, b as u8];
+                    register = number as usize;
+                    index = p;
+                } else {
+                    register = number as usize;
+                    index = next;
+                }
+            }
+            b'"' => {
+                let (_, p) = read_number(body, index + 1); // Pan
+                let (_, p) = read_number(body, p + 1); // Pad
+                let (w, p) = read_number(body, p + 1); // Ph
+                let (h, p) = read_number(body, p + 1); // Pv
+                width = w as usize;
+                height = h as usize;
+                black = vec![false; width * height];
+                x = 0;
+                y = 0;
+                index = p;
+            }
+            b'!' => {
+                let (count, next) = read_number(body, index + 1);
+                let mask = body[next] - 0x3F;
+                paint_band(
+                    &mut black,
+                    width,
+                    x,
+                    y,
+                    count as usize,
+                    mask,
+                    palette[register],
+                );
+                x += count as usize;
+                index = next + 1;
+            }
+            b'$' => {
+                x = 0;
+                index += 1;
+            }
+            b'-' => {
+                y += 6;
+                x = 0;
+                index += 1;
+            }
+            byte if (0x3F..=0x7E).contains(&byte) => {
+                paint_band(&mut black, width, x, y, 1, byte - 0x3F, palette[register]);
+                x += 1;
+                index += 1;
+            }
+            _ => index += 1,
+        }
+    }
+    (width, height, black)
+}
+
+/// Parse a `render_sixel` sequence into the module grid (`side` x `side`; `true`
+/// marks a dark module, sampled from each module's centre pixel).
+///
+/// `invert` mirrors the flag passed to the renderer: when set, the dark modules
+/// are drawn white, so the meaning of a black pixel flips.
+fn parse_sixel(buf: &[u8], side: usize, invert: bool) -> Vec<bool> {
+    let (width, height, black) = parse_sixel_pixels(buf);
+    assert_eq!(width % side, 0, "modules must tile the image exactly");
+    assert_eq!(height, width, "pixel raster must be square");
+    let module_px = width / side;
+
+    let mut ink = vec![false; side * side];
+    for module_y in 0..side {
+        for module_x in 0..side {
+            let x = module_x * module_px + module_px / 2;
+            let y = module_y * module_px + module_px / 2;
+            ink[module_y * side + module_x] = black[y * width + x] != invert;
+        }
+    }
+    ink
+}
+
+#[test]
+fn sixel_bitmap_round_trips() {
+    use qrtxt::types::Ec;
+
+    let cases: &[(&str, bool)] = &[
+        ("hello", false),
+        ("https://example.com/abc", false),
+        ("你好，世界", false),
+        ("hello", true),
+    ];
+    for &(payload, invert) in cases {
+        let codes = qrtxt::encode::encode_multi(payload.as_bytes(), Ec::L, None, None).unwrap();
+        assert_eq!(codes.len(), 1, "payload should fit one symbol");
+        let qr = &codes[0];
+
+        let mut buf = Vec::new();
+        qrtxt::render::render_sixel(qr, DEFAULT_BORDER as u32, invert, &mut buf).unwrap();
+
+        let side = qr.width() + 2 * DEFAULT_BORDER;
+        let ink = parse_sixel(&buf, side, invert);
+        // `ink` marks dark modules, so decode as already-inverted.
+        let decoded = decode(side, side, &ink, qr.width(), true);
+        assert_eq!(decoded, payload, "invert={invert} payload={payload:?}");
+    }
+}
+
+#[test]
+fn sixel_multi_code_round_trips() {
+    use qrtxt::types::Ec;
+
+    // A payload split across several codes: each Sixel sequence must hold that
+    // code's segment and, in order, reproduce the whole payload.
+    let payload: String = (0..600).map(|i| (b'a' + (i % 26) as u8) as char).collect();
+    let codes = qrtxt::encode::encode_multi(payload.as_bytes(), Ec::L, None, Some(3)).unwrap();
+    assert!(codes.len() > 1, "payload should split into several codes");
+
+    let mut assembled = String::new();
+    for (index, qr) in codes.iter().enumerate() {
+        let mut buf = Vec::new();
+        qrtxt::render::render_sixel(qr, DEFAULT_BORDER as u32, false, &mut buf).unwrap();
+
+        let side = qr.width() + 2 * DEFAULT_BORDER;
+        let ink = parse_sixel(&buf, side, false);
+        let part = decode(side, side, &ink, qr.width(), true);
+        assert!(!part.is_empty(), "empty sequence for code {}", index + 1);
+        assembled.push_str(&part);
+    }
+    assert_eq!(assembled, payload, "codes did not reassemble in order");
+}
