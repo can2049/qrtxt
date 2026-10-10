@@ -155,7 +155,9 @@ fn split_chunks(
     let capacity = max_prefix_fitting(data, ec).max(1);
     // Floor the cap at one byte so a zero (or absent) `max_bytes` cannot reach
     // `div_ceil(0)` below; a zero cap splits one byte per code instead of panicking.
-    let cap = max_bytes.map_or(capacity, |bytes| bytes.min(capacity)).max(1);
+    let cap = max_bytes
+        .map_or(capacity, |bytes| bytes.min(capacity))
+        .max(1);
     let text = std::str::from_utf8(data).ok();
     // A code must hold at least one character (or byte), so this bounds the count.
     let most = text.map_or(data.len(), |text| text.chars().count()).max(1);

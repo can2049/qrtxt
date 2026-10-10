@@ -126,7 +126,10 @@ fn max_bytes_splits_into_smaller_codes() {
 
 #[test]
 fn max_bytes_above_the_payload_keeps_a_single_code() {
-    assert_eq!(stdout(&["--max-bytes", "1000", "hello"]), stdout(&["hello"]));
+    assert_eq!(
+        stdout(&["--max-bytes", "1000", "hello"]),
+        stdout(&["hello"])
+    );
 }
 
 #[test]
