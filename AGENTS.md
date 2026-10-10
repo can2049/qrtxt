@@ -39,8 +39,9 @@ terminal text. It is a library (`src/lib.rs`) plus a thin binary (`src/main.rs`)
   decodes it with `rqrr` to prove the printed code still scans. Add round-trip coverage
   for any new glyph, rendering, or encoding behavior.
 - `tests/roundtrip.rs` reads `README.zh-CN.md` from the working directory; keep that file present.
-- CI (`.github/workflows/rust.yml`) runs `cargo build`, `cargo clippy --all-targets -- -D
-  warnings`, and `cargo test`. There is no rustfmt gate, and no formatter config in the repo.
+- CI (`.github/workflows/rust.yml`) checks formatting first (`cargo fmt --all -- --check`, to
+  fail fast), then runs `cargo build`, `cargo clippy --all-targets -- -D warnings`, and
+  `cargo test`. There is no rustfmt config file; the default style applies.
 
 ## Docs and commits
 
