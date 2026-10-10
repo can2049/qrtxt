@@ -145,6 +145,27 @@ pub fn da1_query() -> Vec<u8> {
     b"\x1b[c".to_vec()
 }
 
+/// The parameter list between `ESC [ ?` and the terminating `c`, if a DA1 reply
+/// is present.
+///
+/// The reply looks like `ESC [ ? <P1>;<P2>;... c`.
+fn da1_params(response: &[u8]) -> Option<&[u8]> {
+    let start = find_subslice(response, b"\x1b[?")? + 3;
+    let rest = &response[start..];
+    let end = rest.iter().position(|&byte| byte == b'c')?;
+    Some(&rest[..end])
+}
+
+/// Whether `response` contains a complete DA1 reply (`ESC [ ?` ... `c`),
+/// regardless of the advertised attributes.
+///
+/// Distinguishes "the terminal answered the query" (so the verdict is final)
+/// from "no reply yet".
+#[must_use]
+pub fn has_reply(response: &[u8]) -> bool {
+    da1_params(response).is_some()
+}
+
 /// Whether a DA1 reply advertises Sixel support (device attribute `4`).
 ///
 /// The reply looks like `ESC [ ? <P1>;<P2>;... c`; Sixel-capable terminals list
@@ -152,16 +173,11 @@ pub fn da1_query() -> Vec<u8> {
 /// it, so a `false` here means "not confirmed" rather than "definitely absent".
 #[must_use]
 pub fn response_has_sixel(response: &[u8]) -> bool {
-    let Some(start) = find_subslice(response, b"\x1b[?").map(|at| at + 3) else {
-        return false;
-    };
-    let rest = &response[start..];
-    let Some(end) = rest.iter().position(|&byte| byte == b'c') else {
-        return false;
-    };
-    rest[..end]
-        .split(|&byte| byte == b';')
-        .any(|param| param == b"4")
+    da1_params(response).is_some_and(|params| {
+        params
+            .split(|&byte| byte == b';')
+            .any(|param| param == b"4")
+    })
 }
 
 /// Find the first occurrence of `needle` in `haystack`.
@@ -264,6 +280,17 @@ mod tests {
         assert!(!response_has_sixel(b"\x1b[?62;1;22c"));
         assert!(!response_has_sixel(b"\x1b[?1;2;6c"));
         assert!(!response_has_sixel(b""));
+    }
+
+    #[test]
+    fn has_reply_needs_a_terminated_da1() {
+        // Any DA1 reply counts, even when it does not advertise Sixel.
+        assert!(has_reply(b"\x1b[?62;1;22c"));
+        assert!(has_reply(b"\x1b[?4c"));
+        // Unterminated or absent means no reply yet.
+        assert!(!has_reply(b"\x1b[?62;1;22"));
+        assert!(!has_reply(b"\x1b[?"));
+        assert!(!has_reply(b""));
     }
 
     #[test]

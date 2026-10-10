@@ -7,9 +7,10 @@ Turn text into a QR code, right in your terminal.
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![crates.io](https://img.shields.io/crates/v/qrtxt.svg)](https://crates.io/crates/qrtxt)
 
-`qrtxt` reads a string, a file, or piped input and prints an ordinary QR code
-using Unicode block characters. No graphics environment is required — just a
-UTF-8 terminal.
+`qrtxt` reads a string, a file, or piped input and prints an ordinary QR code.
+By default it picks the best rendering your terminal offers — a crisp bitmap
+over the Kitty or Sixel graphics protocol where supported, otherwise Unicode
+block characters, so a plain UTF-8 terminal always works.
 
 ```console
 $ qrtxt "hi"
@@ -33,17 +34,14 @@ $ qrtxt "hi"
 
 - **Three input modes** — a literal argument, a file (`--file`), or standard input.
 - **Exact error correction** — `L`, `M`, `Q`, or `H`, never silently boosted.
+- **Five render modes** — `--mode auto` (default) picks the best rendering the
+  terminal offers: a crisp bitmap over the Kitty or Sixel graphics protocol where
+  supported, otherwise Unicode block glyphs. Force a specific one with `text`,
+  `ansi`, `kitty`, or `sixel`. A bitmap is smaller and crisper than block glyphs;
+  `ansi` covers terminals without block glyphs; an unsupported bitmap mode fails
+  fast instead of printing garbage.
 - **Three glyph sets** — half blocks (default), quadrants, braille — trading
-  robustness for screen density.
-- **ANSI rendering** — `--no-compact` for terminals without block glyphs.
-- **Bitmap rendering** — `--kitty` draws a crisp black-and-white bitmap through
-  the Kitty graphics protocol, which can be smaller than the block-glyph
-  rendering (kitty, Ghostty, WezTerm); unsupported terminals fail fast instead
-  of printing garbage.
-- **Sixel rendering** — `--sixel` draws the same bitmap through the Sixel
-  graphics protocol, covering a different set of terminals (xterm, Konsole, foot,
-  Windows Terminal, …); unsupported terminals fail fast instead of printing
-  garbage.
+  robustness for screen density (used by `--mode text`).
 - **Dark and light terminals** — `--invert` handles light backgrounds.
 - **Long payloads** — input too long for one symbol is split automatically across
   balanced codes; `--max-bytes` caps the bytes per code, `--chunk` sets a floor on
@@ -82,23 +80,27 @@ Requires Rust 1.85 or newer.
 ```text
 qrtxt [OPTIONS] [DATA]
 
-Arguments:
-  [DATA]                 Literal payload to encode
-
 Options:
-  -g, --glyphs <SET>              Glyph set used to pack modules into character cells: half (h; 1x2 modules per cell, most robust), quadrant (q; 2x2), or braille (b; 2x4, densest) [default: half]
+  -h, --help     Print help (see more with '--help')
+  -V, --version  Print version
+
+Payload:
+  -f, --file <PATH>       Read the payload from a file
+  -p, --preserve-newline  Keep one trailing newline from file or piped input
+  [DATA]                  Literal payload to encode
+
+Encoding:
   -e, --error-correction <LEVEL>  Error-correction level: L (about 7% recoverable), M (15%), Q (25%), or H (30%) [default: L]
-  -m, --max-bytes <BYTES>          Cap the payload of each QR code at BYTES bytes; implies splitting (default: the symbol's own limit)
+  -m, --max-bytes <BYTES>         Cap the payload of each QR code at BYTES bytes; implies splitting (default: the symbol's own limit)
   -c, --chunk <COUNT>             Split the payload across at least COUNT QR codes; advisory (default: no minimum)
-  -a, --no-compact                Render with ANSI escape codes instead of Unicode block characters
-  -k, --kitty                     Draw a smaller QR as a bitmap through the Kitty graphics protocol
-  -s, --sixel                     Draw a smaller QR as a bitmap through the Sixel graphics protocol
-  -f, --file <PATH>               Read the payload from a file
-  -p, --preserve-newline          Keep one trailing newline from file or piped input
-  -b, --border <BORDER>           Quiet-zone width in modules; 0 removes the margin [default: 4]
-  -i, --invert                    Invert the ink, for light-background terminals
-  -h, --help                      Print help (see more with '--help')
-  -V, --version                   Print version
+
+Rendering:
+  -M, --mode <MODE>      How to draw the code: auto, text, ansi, kitty, or sixel [default: auto]
+  -b, --border <BORDER>  Quiet-zone width in modules; 0 removes the margin [default: 4]
+  -i, --invert           Invert the ink, for light-background terminals
+
+Text rendering:
+  -g, --glyphs <SET>  Glyph set used to pack modules into character cells: half (h; 1x2 modules per cell, most robust), quadrant (q; 2x2), or braille (b; 2x4, densest) [default: half]
 
 Source: https://github.com/can2049/qrtxt
 ```
@@ -118,6 +120,18 @@ cat token.txt | qrtxt
 # read from a file
 qrtxt --file payload.txt
 
+# a crisp black-and-white bitmap (needs a Kitty-protocol terminal)
+qrtxt --mode kitty "https://example.com"
+
+# a crisp black-and-white bitmap (needs a Sixel-protocol terminal)
+qrtxt --mode sixel "https://example.com"
+
+# force Unicode block glyphs (for a pipe, or to compare against a bitmap)
+qrtxt --mode text "hello"
+
+# ANSI escape codes for terminals without block glyphs
+qrtxt --mode ansi "hello"
+
 # higher error correction
 qrtxt --error-correction H "important payload"
 
@@ -125,13 +139,7 @@ qrtxt --error-correction H "important payload"
 qrtxt --border 1 "hello"
 
 # denser packing for narrow terminals
-qrtxt --glyphs braille "hello"
-
-# crisp black-and-white bitmap (needs a Kitty-protocol terminal)
-qrtxt --kitty "https://example.com"
-
-# crisp black-and-white bitmap (needs a Sixel-protocol terminal)
-qrtxt --sixel "https://example.com"
+qrtxt --mode text --glyphs braille "hello"
 
 # light-background terminal
 qrtxt --invert "hello"
@@ -142,6 +150,28 @@ qrtxt --max-bytes 500 --file big.txt
 # split into at least 4 balanced codes
 qrtxt --chunk 4 "a-short-but-verifiable-payload"
 ```
+
+## Rendering modes
+
+`--mode` chooses how the code is drawn:
+
+| `--mode` | Family | What it draws |
+|---|---|---|
+| `auto` (default) | — | A bitmap when the terminal supports one, otherwise Unicode block glyphs. |
+| `text` | characters | Unicode block glyphs (the glyph set applies). |
+| `ansi` | characters | Reverse-video escape codes; wider, for terminals without block glyphs. |
+| `kitty` | bitmap | A black-and-white bitmap via the Kitty graphics protocol. |
+| `sixel` | bitmap | The same bitmap via the Sixel graphics protocol. |
+
+A bitmap is smaller and crisper than block glyphs, so `auto` prefers it — but only
+where it makes sense. `auto` **never** emits a bitmap when standard output is not
+a terminal, so `qrtxt ... > code.txt` or `qrtxt ... | head` always produces text.
+`--mode kitty` and `--mode sixel` force a protocol and fail with a usage error
+(exit code 2) when the terminal cannot draw it.
+
+`--glyphs` applies to `text` only; `--invert` applies to every mode (in a bitmap
+it swaps the two colours). `--help` probes the current terminal once and appends
+to the `--mode` entry what `auto` will pick there.
 
 ## Glyph sets
 
@@ -162,7 +192,7 @@ dark-on-light code. `qrtxt` never queries the terminal background itself.
 
 ## Kitty graphics protocol
 
-`--kitty` (`-k`) draws the code as a real bitmap using the
+`--mode kitty` draws the code as a real bitmap using the
 [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/)
 instead of Unicode glyphs, so it is not limited by how the font renders block
 characters and can be much smaller. It needs a terminal that implements the
@@ -174,12 +204,12 @@ render. The output is pure black and white and carries its own white quiet zone,
 so `--invert` swaps the two colours while the code stays self-contained; the
 glyph set is ignored.
 
-The same probe runs for `--help`, so when standard output is a terminal the
-`--kitty` entry ends with a one-line verdict for the current terminal.
+`auto` uses the same probe to prefer Kitty over Sixel, and the `--help` probe
+appends to the `--mode` entry what `auto` will pick for the current terminal.
 
 ## Sixel graphics protocol
 
-`--sixel` (`-s`) draws the same black-and-white bitmap as `--kitty`, but through
+`--mode sixel` draws the same black-and-white bitmap as `--mode kitty`, but through
 the older [Sixel graphics format](https://en.wikipedia.org/wiki/Sixel). The two
 cover different terminals: Sixel reaches xterm, Konsole, foot, mlterm, iTerm2, and
 Windows Terminal (1.22+), which do not implement the Kitty protocol, while kitty
@@ -191,9 +221,9 @@ Support detection is weaker than Kitty's: Sixel has no handshake, so `qrtxt` sen
 a Primary Device Attributes query and only accepts terminals that advertise Sixel
 (device attribute `4`). A terminal that supports Sixel without advertising it is
 treated as unsupported, so the tool never prints escape bytes a terminal cannot
-draw. As with `--kitty`, the output is pure black and white with its own white
+draw. As with `--mode kitty`, the output is pure black and white with its own white
 quiet zone, `--invert` swaps the two colours, and the glyph set is ignored. The
-`--help` probe appends a verdict to the `--sixel` entry the same way.
+`--help` probe reports it on the `--mode` entry the same way.
 
 The image declares square pixels, so the modules stay square on terminals that
 honour the raster attributes — but Sixel rendering has not been visually verified

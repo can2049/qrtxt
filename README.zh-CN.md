@@ -7,8 +7,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![crates.io](https://img.shields.io/crates/v/qrtxt.svg)](https://crates.io/crates/qrtxt)
 
-`qrtxt` 读取字符串、文件或管道输入,用 Unicode 块字符在标准输出上打印一个普通
-二维码。无需图形环境,只要有 UTF-8 终端即可。
+`qrtxt` 读取字符串、文件或管道输入,在标准输出上打印一个普通二维码。默认它会挑选
+终端所能提供的最佳渲染方式——终端支持时用 Kitty/Sixel 图形协议绘制清晰的位图,
+否则回退到 Unicode 块字符,因此普通 UTF-8 终端始终可用。
 
 ```console
 $ qrtxt "hi"
@@ -32,10 +33,12 @@ $ qrtxt "hi"
 
 - **三种输入方式** —— 位置参数字面量、文件(`--file`)、标准输入。
 - **精确纠错等级** —— `L`、`M`、`Q`、`H`,不做自动升档。
-- **三种字形集** —— 半块(默认)、象限块、盲文点阵,在可扫性与屏幕密度之间取舍。
-- **ANSI 渲染** —— `--no-compact`,用于不支持块字符的终端。
-- **位图渲染** —— `--kitty` 通过 Kitty 图形协议绘制清晰的黑白位图,可比块字符渲染更小(kitty、Ghostty、WezTerm);不支持的终端会快速报错,而不是打印乱码。
-- **Sixel 渲染** —— `--sixel` 通过 Sixel 图形协议绘制同样的位图,覆盖另一批终端(xterm、Konsole、foot、Windows Terminal 等);不支持的终端会快速报错,而不是打印乱码。
+- **五种渲染模式** —— `--mode auto`(默认)挑选终端的最佳渲染方式:支持时用
+  Kitty/Sixel 图形协议绘制清晰位图,否则回退到 Unicode 块字符;也可用 `text`、
+  `ansi`、`kitty`、`sixel` 强制指定。位图比块字符更小更清晰,`ansi` 覆盖不支持块
+  字符的终端,不受支持的位图模式会快速报错而不是打印乱码。
+- **三种字形集** —— 半块(默认)、象限块、盲文点阵,在可扫性与屏幕密度之间取舍
+  (仅用于 `--mode text`)。
 - **深色/浅色终端** —— `--invert` 适配浅色背景。
 - **超长内容** —— 放不进单个二维码的内容会自动均分成多个二维码;`--max-bytes` 可限制每个二维码的字节数,`--chunk` 可指定二维码数量的下限。
 - **默认安全** —— 无 `unsafe` 代码,错误信息绝不回显 payload。
@@ -71,23 +74,27 @@ cargo install --path .
 ```text
 qrtxt [OPTIONS] [DATA]
 
-参数:
-  [DATA]                 字面量 payload;省略时从 --file 或 stdin 读取
-
 选项:
-  -g, --glyphs <SET>             字形集,决定每个字符格打包多少模块: half (h;1x2 模块/格,最稳)、quadrant (q;2x2)、braille (b;2x4,最密) [默认: half]
-  -e, --error-correction <LEVEL> 纠错等级: L(约可恢复 7%)、M(15%)、Q(25%)、H(30%) [默认: L]
+  -h, --help     打印帮助(用 '--help' 查看更详细说明)
+  -V, --version  打印版本
+
+输入:
+  -f, --file <PATH>       从文件读取 payload
+  -p, --preserve-newline  保留文件/管道输入尾部的一个换行
+  [DATA]                  字面量 payload;省略时从 --file 或 stdin 读取
+
+编码:
+  -e, --error-correction <LEVEL>  纠错等级: L(约可恢复 7%)、M(15%)、Q(25%)、H(30%) [默认: L]
   -m, --max-bytes <BYTES>         限制每个二维码的负载为 BYTES 字节;会触发拆分(默认: 单个符号自身的上限)
-  -c, --chunk <COUNT>            把负载拆分成至少 COUNT 个二维码;引导性(默认: 无下限)
-  -a, --no-compact               用 ANSI 转义序列渲染,替代 Unicode 块字符
-  -k, --kitty                    通过 Kitty 图形协议把二维码画成更小的位图
-  -s, --sixel                    通过 Sixel 图形协议把二维码画成更小的位图
-  -f, --file <PATH>              从文件读取 payload
-  -p, --preserve-newline         保留文件/管道输入尾部的一个换行
-  -b, --border <BORDER>          静默区宽度(模块数);0 表示去掉留白 [默认: 4]
-  -i, --invert                   反转墨色,用于浅色背景终端
-  -h, --help                     打印帮助(用 '--help' 查看更详细说明)
-  -V, --version                  打印版本
+  -c, --chunk <COUNT>             把负载拆分成至少 COUNT 个二维码;引导性(默认: 无下限)
+
+渲染:
+  -M, --mode <MODE>      绘制方式: auto、text、ansi、kitty 或 sixel [默认: auto]
+  -b, --border <BORDER>  静默区宽度(模块数);0 表示去掉留白 [默认: 4]
+  -i, --invert           反转墨色,用于浅色背景终端
+
+文本渲染:
+  -g, --glyphs <SET>  字形集,决定每个字符格打包多少模块: half (h;1x2 模块/格,最稳)、quadrant (q;2x2)、braille (b;2x4,最密) [默认: half]
 
 Source: https://github.com/can2049/qrtxt
 ```
@@ -106,6 +113,18 @@ cat token.txt | qrtxt
 # 从文件读取
 qrtxt --file payload.txt
 
+# 清晰的黑白位图(需要支持 Kitty 协议的终端)
+qrtxt --mode kitty "https://example.com"
+
+# 清晰的黑白位图(需要支持 Sixel 协议的终端)
+qrtxt --mode sixel "https://example.com"
+
+# 强制使用 Unicode 块字符(用于管道,或与位图对照)
+qrtxt --mode text "hello"
+
+# 不支持块字符的终端:用 ANSI 转义序列
+qrtxt --mode ansi "hello"
+
 # 更高的纠错等级
 qrtxt --error-correction H "important payload"
 
@@ -113,13 +132,7 @@ qrtxt --error-correction H "important payload"
 qrtxt --border 1 "hello"
 
 # 为窄终端选择更高密度
-qrtxt --glyphs braille "hello"
-
-# 清晰的黑白位图(需要支持 Kitty 协议的终端)
-qrtxt --kitty "https://example.com"
-
-# 清晰的黑白位图(需要支持 Sixel 协议的终端)
-qrtxt --sixel "https://example.com"
+qrtxt --mode text --glyphs braille "hello"
 
 # 浅色背景终端
 qrtxt --invert "hello"
@@ -131,6 +144,26 @@ qrtxt --max-bytes 500 --file big.txt
 qrtxt --chunk 4 "a-short-but-verifiable-payload"
 ```
 
+## 渲染模式
+
+`--mode` 决定二维码如何绘制:
+
+| `--mode` | 家族 | 绘制内容 |
+|---|---|---|
+| `auto`(默认) | — | 终端支持时用位图,否则用 Unicode 块字符。 |
+| `text` | 字符 | Unicode 块字符(字形集生效)。 |
+| `ansi` | 字符 | 反色转义序列;更宽,用于不支持块字符的终端。 |
+| `kitty` | 位图 | 通过 Kitty 图形协议绘制黑白位图。 |
+| `sixel` | 位图 | 通过 Sixel 图形协议绘制同样的位图。 |
+
+位图比块字符更小更清晰,因此 `auto` 优先使用它——但仅在合适的时候。标准输出不是
+终端时 `auto` **绝不**输出位图,所以 `qrtxt ... > code.txt` 或 `qrtxt ... | head`
+始终得到文本。`--mode kitty` 与 `--mode sixel` 强制使用对应协议,终端画不出来时
+以用法错误(退出码 2)退出。
+
+`--glyphs` 仅对 `text` 生效;`--invert` 对所有模式生效(位图模式下交换两种颜色)。
+`--help` 会对当前终端探测一次,并在 `--mode` 说明末尾附上 `auto` 会选哪一种。
+
 ## 字形集
 
 | `--glyphs` | 每字符格的模块数 | 说明 |
@@ -139,7 +172,8 @@ qrtxt --chunk 4 "a-short-but-verifiable-payload"
 | `quadrant` (q) | 2 × 2        | 横向密度翻倍。 |
 | `braille` (b)  | 2 × 4        | 密度最高;依赖字体把点渲染得足够密。 |
 
-每个字形集也接受其首字母(`-g h`、`-g q`、`-g b`)。
+每个字形集也接受其首字母(`-g h`、`-g q`、`-g b`)。仅用于 `--mode text`;位图与
+ANSI 渲染会忽略它。
 
 ## 深色与浅色终端
 
@@ -149,19 +183,19 @@ qrtxt --chunk 4 "a-short-but-verifiable-payload"
 
 ## Kitty 图形协议
 
-`--kitty`(`-k`)改用 [Kitty 图形协议](https://sw.kovidgoyal.net/kitty/graphics-protocol/)
+`--mode kitty` 改用 [Kitty 图形协议](https://sw.kovidgoyal.net/kitty/graphics-protocol/)
 把二维码绘制成真正的位图,不再受字体如何渲染块字符的限制,因此画得更小。它需要终端实现该协议
 ——例如 kitty、Ghostty、WezTerm。`qrtxt` 会先用 `a=q` 握手探测终端;若协议不受支持
 (或标准输出不是终端),则直接以用法错误退出,而不是输出终端无法渲染的转义字节。
 输出为纯黑白,并自带白色静默区,因此 `--invert` 会交换两种颜色而二维码保持自洽;
 字形集选项被忽略。
 
-`--help` 也会执行同一次探测:当标准输出是终端时,`--kitty` 选项说明末尾会附上当前
-终端是否支持的一行结论。
+`auto` 也用同一次探测在 Kitty 与 Sixel 之间优先选 Kitty;`--help` 探测会在 `--mode`
+说明末尾附上 `auto` 对当前终端会选哪一种。
 
 ## Sixel 图形协议
 
-`--sixel`(`-s`)绘制与 `--kitty` 相同的黑白位图,但走较老的
+`--mode sixel` 绘制与 `--mode kitty` 相同的黑白位图,但走较老的
 [Sixel 图形格式](https://en.wikipedia.org/wiki/Sixel)。两者覆盖不同的终端:Sixel 触达
 xterm、Konsole、foot、mlterm、iTerm2、Windows Terminal(1.22+)——这些终端不实现
 Kitty 协议;而 kitty、Ghostty 实现 Kitty 却不支持 Sixel。由于二维码只有两种颜色,
@@ -169,8 +203,9 @@ Sixel 输出仅用两个调色板寄存器 + 游程编码,因此非常紧凑。
 
 Sixel 的支持探测比 Kitty 弱:它没有握手,`qrtxt` 会发送一次主设备属性查询(DA1),
 只有广告支持 Sixel(设备属性 `4`)的终端才被接受;支持但不广告的终端按"不支持"处理,
-因此绝不会输出终端画不出来的转义字节。与 `--kitty` 一样,输出为纯黑白并自带白色静默区,
-`--invert` 交换两种颜色,字形集选项被忽略;`--help` 探测同样会给 `--sixel` 末尾附上结论。
+因此绝不会输出终端画不出来的转义字节。与 `--mode kitty` 一样,输出为纯黑白并自带白色
+静默区,`--invert` 交换两种颜色,字形集选项被忽略;`--help` 探测同样在 `--mode` 说明
+末尾给出结论。
 
 图像会声明方形像素,因此在遵守光栅属性的终端上模块保持方正——但 Sixel 渲染尚未在所有
 终端上目视验证,请确认打印出来的二维码仍可扫。

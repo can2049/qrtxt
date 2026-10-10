@@ -4,9 +4,7 @@ use std::process::ExitCode;
 
 use clap::{CommandFactory, FromArgMatches, Parser};
 
-use qrtxt::cli::{
-    Cli, add_kitty_hint, add_sixel_hint, kitty_support_hint, run_with, sixel_support_hint,
-};
+use qrtxt::cli::{Cli, add_mode_hint, mode_support_hint, run_with};
 
 fn main() -> ExitCode {
     let cli = parse();
@@ -23,23 +21,13 @@ fn main() -> ExitCode {
 /// Parse the arguments. clap prints usage errors (code 2) and `--help`/
 /// `--version` (code 0) itself.
 ///
-/// When help is being shown, the `--kitty` and `--sixel` options each gain a live
-/// hint about whether the current terminal supports that protocol. The probes
-/// only run for help, so a normal invocation is unaffected; a piped `--help`
-/// yields no hint (no terminal).
+/// When help is being shown, the `--mode` option gains a live hint about what
+/// `auto` will pick on the current terminal. The probe only runs for help, so a
+/// normal invocation is unaffected; a piped `--help` yields no hint (no terminal).
 fn parse() -> Cli {
     if help_requested() {
-        let mut command = Cli::command();
-        let mut has_hint = false;
-        if let Some(hint) = kitty_support_hint() {
-            command = add_kitty_hint(command, &hint);
-            has_hint = true;
-        }
-        if let Some(hint) = sixel_support_hint() {
-            command = add_sixel_hint(command, &hint);
-            has_hint = true;
-        }
-        if has_hint {
+        if let Some(hint) = mode_support_hint() {
+            let command = add_mode_hint(Cli::command(), &hint);
             let matches = command.get_matches();
             return Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
         }

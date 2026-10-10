@@ -10,12 +10,12 @@ use clap::Parser;
 use qrcode::QrCode;
 
 use crate::error::AppError;
-use crate::types::{Config, Ec, GlyphSet, InputSpec, RenderMode};
+use crate::types::{Config, Ec, GlyphSet, InputSpec, Mode, RenderMode};
 
 mod help;
 mod probe;
 
-pub use help::{add_kitty_hint, add_sixel_hint, kitty_support_hint, sixel_support_hint};
+pub use help::{add_mode_hint, mode_support_hint};
 
 /// Turn text into a terminal QR code.
 #[derive(Debug, Parser)]
@@ -25,8 +25,9 @@ pub use help::{add_kitty_hint, add_sixel_hint, kitty_support_hint, sixel_support
     about = "Turn text into a terminal QR code",
     long_about = "Turn text into a terminal QR code.\n\n\
 Reads a payload from a literal argument, a file, or standard input and prints it as one or \
-more QR codes drawn with Unicode block characters, so no graphics environment is needed — \
-just a UTF-8 terminal.\n\n\
+more QR codes. By default it picks the best rendering the terminal offers: a crisp bitmap \
+over the Kitty or Sixel graphics protocol where supported, otherwise Unicode block \
+characters, so a plain UTF-8 terminal always works. Use --mode to force a specific renderer.\n\n\
 A payload too large for a single symbol is split automatically across several balanced codes, \
 printed in order under a `QR i/N` caption. Use --max-bytes to cap the bytes per code, or \
 --chunk to require a minimum number of codes.",
@@ -37,21 +38,8 @@ pub struct Cli {
     ///
     /// Used exactly as given (no trailing-newline stripping). When omitted, the
     /// payload is read from --file, or from standard input when no file is given.
-    #[arg(value_name = "DATA")]
+    #[arg(value_name = "DATA", help_heading = "Payload")]
     pub data: Option<String>,
-
-    /// Glyph set used to pack modules into character cells: half (h; 1x2 modules
-    /// per cell, most robust), quadrant (q; 2x2), or braille (b; 2x4, densest).
-    ///
-    /// Each set also accepts its initial letter (e.g. `-g b`). Braille needs a font
-    /// that renders dots tightly.
-    #[arg(
-        short = 'g',
-        long = "glyphs",
-        value_name = "SET",
-        default_value = "half"
-    )]
-    pub glyphs: GlyphSet,
 
     /// Error-correction level: L (about 7% recoverable), M (15%), Q (25%), or H
     /// (30%).
@@ -63,7 +51,8 @@ pub struct Cli {
         short = 'e',
         long = "error-correction",
         value_name = "LEVEL",
-        default_value = "L"
+        default_value = "L",
+        help_heading = "Encoding"
     )]
     pub error: Ec,
 
@@ -78,7 +67,8 @@ pub struct Cli {
         short = 'm',
         long = "max-bytes",
         value_name = "BYTES",
-        value_parser = clap::value_parser!(u32).range(1..)
+        value_parser = clap::value_parser!(u32).range(1..),
+        help_heading = "Encoding"
     )]
     pub max_bytes: Option<u32>,
 
@@ -93,39 +83,28 @@ pub struct Cli {
         short = 'c',
         long = "chunk",
         value_name = "COUNT",
-        value_parser = clap::value_parser!(u32).range(1..)
+        value_parser = clap::value_parser!(u32).range(1..),
+        help_heading = "Encoding"
     )]
     pub chunk: Option<u32>,
 
-    /// Render with ANSI escape codes instead of Unicode block characters.
+    /// How to draw the code: auto, text, ansi, kitty, or sixel.
     ///
-    /// Use this on terminals that do not display block glyphs correctly. The output
-    /// is wider (two spaces per module) and uses reverse-video escapes.
-    #[arg(short = 'a', long = "no-compact")]
-    pub no_compact: bool,
-
-    /// Draw a smaller QR as a bitmap through the Kitty graphics protocol.
-    ///
-    /// A bitmap is not limited by the font, so every module stays crisp and the
-    /// code can be much smaller than the block-glyph rendering. It needs a
-    /// terminal that implements the protocol — kitty, Ghostty, or WezTerm, for
-    /// example. qrtxt probes the terminal with an `a=q` handshake and, if it is
-    /// unsupported (or standard output is not a terminal), fails with a usage
-    /// error rather than print unusable escape bytes. The glyph set is ignored;
-    /// `--invert` swaps the two colours.
-    #[arg(short = 'k', long = "kitty", conflicts_with = "no_compact")]
-    pub kitty: bool,
-
-    /// Draw a smaller QR as a bitmap through the Sixel graphics protocol.
-    ///
-    /// Like --kitty, a bitmap is not limited by the font, so every module stays
-    /// crisp. It needs a terminal that implements the protocol — xterm, Konsole,
-    /// foot, or Windows Terminal, for example. qrtxt probes the terminal with a
-    /// device-attributes query and, if it is unsupported (or standard output is
-    /// not a terminal), fails with a usage error rather than print unusable
-    /// escape bytes. The glyph set is ignored; `--invert` swaps the two colours.
-    #[arg(short = 's', long = "sixel", conflicts_with_all = ["no_compact", "kitty"])]
-    pub sixel: bool,
+    /// `auto` (the default) uses a bitmap when the terminal supports one — it is
+    /// smaller and crisper than block characters — and falls back to Unicode block
+    /// glyphs otherwise. It never emits a bitmap when standard output is not a
+    /// terminal, so piping or redirecting always yields text. `text` draws Unicode
+    /// block glyphs (honouring --glyphs); `ansi` draws reverse-video escape codes;
+    /// `kitty` and `sixel` force that bitmap protocol and fail with a usage error
+    /// if the terminal does not support it.
+    #[arg(
+        short = 'M',
+        long = "mode",
+        value_name = "MODE",
+        default_value = "auto",
+        help_heading = "Rendering"
+    )]
+    pub mode: Mode,
 
     /// Read the payload from a file.
     ///
@@ -135,7 +114,8 @@ pub struct Cli {
         short = 'f',
         long = "file",
         value_name = "PATH",
-        conflicts_with = "data"
+        conflicts_with = "data",
+        help_heading = "Payload"
     )]
     pub file: Option<std::path::PathBuf>,
 
@@ -144,23 +124,44 @@ pub struct Cli {
     /// By default exactly one trailing newline (LF or CRLF) is stripped from file
     /// and standard-input payloads; this flag keeps it. A literal DATA argument is
     /// never stripped.
-    #[arg(short = 'p', long = "preserve-newline")]
+    #[arg(short = 'p', long = "preserve-newline", help_heading = "Payload")]
     pub preserve_newline: bool,
 
     /// Quiet-zone width in modules; 0 removes the margin.
     ///
     /// The blank margin drawn around the symbol. The QR specification asks for 4;
     /// smaller values shrink the output but can make scanning less reliable.
-    #[arg(short = 'b', long = "border", default_value_t = 4)]
+    #[arg(
+        short = 'b',
+        long = "border",
+        default_value_t = 4,
+        help_heading = "Rendering"
+    )]
     pub border: u32,
 
     /// Invert the ink, for light-background terminals.
     ///
     /// Modules are drawn in the terminal's foreground color, so the default suits a
     /// dark background. On a light background the code would appear inverted; pass
-    /// this to keep it dark-on-light and scannable.
-    #[arg(short = 'i', long = "invert")]
+    /// this to keep it dark-on-light and scannable. In the bitmap modes it swaps
+    /// the two colors instead.
+    #[arg(short = 'i', long = "invert", help_heading = "Rendering")]
     pub invert: bool,
+
+    /// Glyph set used to pack modules into character cells: half (h; 1x2 modules
+    /// per cell, most robust), quadrant (q; 2x2), or braille (b; 2x4, densest).
+    ///
+    /// Each set also accepts its initial letter (e.g. `-g b`). Braille needs a font
+    /// that renders dots tightly. Only used by `--mode text`; the bitmap and ANSI
+    /// renderers ignore it.
+    #[arg(
+        short = 'g',
+        long = "glyphs",
+        value_name = "SET",
+        default_value = "half",
+        help_heading = "Text rendering"
+    )]
+    pub glyphs: GlyphSet,
 }
 
 impl Cli {
@@ -178,15 +179,7 @@ impl Cli {
             border: self.border,
             invert: self.invert,
             glyphs: self.glyphs,
-            mode: if self.kitty {
-                RenderMode::Kitty
-            } else if self.sixel {
-                RenderMode::Sixel
-            } else if self.no_compact {
-                RenderMode::Ansi
-            } else {
-                RenderMode::Compact
-            },
+            mode: base_render_mode(self.mode),
             preserve_newline: self.preserve_newline,
             max_bytes: self.max_bytes.map(|bytes| bytes as usize),
             min_chunks: self.chunk.map(|count| count as usize),
@@ -194,18 +187,54 @@ impl Cli {
     }
 }
 
+/// The render mode a [`Mode`] maps to without a terminal to probe.
+///
+/// `auto` becomes text here: this is the interpretation [`Cli::to_config`] hands
+/// to the pure [`run`] path. [`run_with`] refines `auto` against the terminal's
+/// capabilities before running.
+fn base_render_mode(mode: Mode) -> RenderMode {
+    match mode {
+        Mode::Auto | Mode::Text => RenderMode::Compact,
+        Mode::Ansi => RenderMode::Ansi,
+        Mode::Kitty => RenderMode::Kitty,
+        Mode::Sixel => RenderMode::Sixel,
+    }
+}
+
 /// Default entry point: reads global stdin/stdout and TTY state.
 pub fn run_with(cli: &Cli) -> Result<(), AppError> {
-    let cfg = cli.to_config();
-    match cfg.mode {
-        RenderMode::Kitty => probe::ensure_kitty_supported()?,
-        RenderMode::Sixel => probe::ensure_sixel_supported()?,
-        _ => {}
-    }
+    let mut cfg = cli.to_config();
+    cfg.mode = resolve_mode(cli.mode)?;
     let mut stdin = std::io::stdin().lock();
     let mut stdout = std::io::stdout().lock();
     let stdin_is_tty = std::io::stdin().is_terminal();
     run(&cfg, &mut stdin, &mut stdout, stdin_is_tty)
+}
+
+/// Resolve the requested [`Mode`] into a concrete [`RenderMode`], probing the
+/// terminal where needed.
+///
+/// `auto` picks a bitmap only when standard output is a terminal and a protocol
+/// is supported (Kitty preferred, then Sixel); otherwise it stays text — a
+/// redirected or piped run is never handed bitmap escape bytes.
+fn resolve_mode(mode: Mode) -> Result<RenderMode, AppError> {
+    match mode {
+        Mode::Auto => match probe::probe_for_auto()? {
+            Some(caps) if caps.kitty => Ok(RenderMode::Kitty),
+            Some(caps) if caps.sixel => Ok(RenderMode::Sixel),
+            _ => Ok(RenderMode::Compact),
+        },
+        Mode::Text => Ok(RenderMode::Compact),
+        Mode::Ansi => Ok(RenderMode::Ansi),
+        Mode::Kitty => {
+            probe::ensure_kitty_supported()?;
+            Ok(RenderMode::Kitty)
+        }
+        Mode::Sixel => {
+            probe::ensure_sixel_supported()?;
+            Ok(RenderMode::Sixel)
+        }
+    }
 }
 
 /// Orchestrate input -> encode -> render. All side effects live here.
@@ -322,7 +351,7 @@ mod tests {
 
     #[test]
     fn defaults_and_flags() {
-        let cfg = parse(&["x", "--no-compact", "--invert", "--glyphs", "braille"]).to_config();
+        let cfg = parse(&["x", "--mode", "ansi", "--invert", "--glyphs", "braille"]).to_config();
         assert_eq!(cfg.mode, RenderMode::Ansi);
         assert!(cfg.invert);
         assert_eq!(cfg.glyphs, GlyphSet::Braille);
@@ -334,7 +363,7 @@ mod tests {
     #[test]
     fn short_flags_resolve() {
         let cfg = parse(&[
-            "-p", "-i", "-a", "-g", "half", "-e", "H", "-b", "2", "-m", "9", "x",
+            "-p", "-i", "-M", "ansi", "-g", "half", "-e", "H", "-b", "2", "-m", "9", "x",
         ])
         .to_config();
         assert!(cfg.preserve_newline);
@@ -413,10 +442,11 @@ mod tests {
     #[test]
     fn ansi_output_is_independent_of_the_glyph_set() {
         // Regression: ANSI ignores the glyph set, but the frame was still padded
-        // to the chosen glyph's tile, so `-a -g braille` gained blank rows over
-        // `-a`. The frame now uses the smallest tile in ANSI mode, so they match.
-        let ansi = parse(&["-a", "hi"]).to_config();
-        let braille = parse(&["-a", "-g", "braille", "hi"]).to_config();
+        // to the chosen glyph's tile, so `--mode ansi -g braille` gained blank
+        // rows over `--mode ansi`. The frame now uses the smallest tile in ANSI
+        // mode, so they match.
+        let ansi = parse(&["--mode", "ansi", "hi"]).to_config();
+        let braille = parse(&["--mode", "ansi", "-g", "braille", "hi"]).to_config();
         assert_eq!(braille.mode, RenderMode::Ansi);
         let codes =
             crate::encode::encode_multi(b"hi", ansi.ec, ansi.max_bytes, ansi.min_chunks).unwrap();
@@ -434,7 +464,7 @@ mod tests {
         // replaced every bitmap but the last and the earlier codes looked
         // unrendered. Each code must now be transmitted as its own image with a
         // distinct id, in order.
-        let cfg = parse(&["-k", "-e", "L", "x"]).to_config();
+        let cfg = parse(&["--mode", "kitty", "-e", "L", "x"]).to_config();
         let codes =
             crate::encode::encode_multi(&vec![b'x'; 6000], cfg.ec, cfg.max_bytes, cfg.min_chunks)
                 .unwrap();
@@ -476,7 +506,8 @@ mod tests {
         let cfg = parse(&[
             "--preserve-newline",
             "--invert",
-            "--no-compact",
+            "--mode",
+            "ansi",
             "--glyphs",
             "quadrant",
             "--error-correction",
@@ -502,13 +533,16 @@ mod tests {
 
     #[test]
     fn removed_options_are_rejected() {
-        let cases: [&[&str]; 6] = [
+        let cases: [&[&str]; 9] = [
             &["qrtxt", "--raw", "x"],
             &["qrtxt", "--ansi", "x"],
             &["qrtxt", "--ec", "x"],
             &["qrtxt", "--pad", "x"],
             &["qrtxt", "--size", "2", "x"],
             &["qrtxt", "--multi", "x"],
+            &["qrtxt", "--no-compact", "x"],
+            &["qrtxt", "--kitty", "x"],
+            &["qrtxt", "--sixel", "x"],
         ];
         for args in cases {
             assert!(
@@ -519,33 +553,51 @@ mod tests {
     }
 
     #[test]
-    fn kitty_flag_selects_kitty_mode() {
-        assert_eq!(parse(&["--kitty", "x"]).to_config().mode, RenderMode::Kitty);
-        assert_eq!(parse(&["-k", "x"]).to_config().mode, RenderMode::Kitty);
+    fn mode_flag_selects_kitty() {
+        assert_eq!(
+            parse(&["--mode", "kitty", "x"]).to_config().mode,
+            RenderMode::Kitty
+        );
+        assert_eq!(
+            parse(&["-M", "kitty", "x"]).to_config().mode,
+            RenderMode::Kitty
+        );
         assert_ne!(parse(&["x"]).to_config().mode, RenderMode::Kitty);
     }
 
     #[test]
-    fn kitty_conflicts_with_no_compact() {
-        assert!(Cli::try_parse_from(["qrtxt", "--kitty", "--no-compact", "x"]).is_err());
-    }
-
-    #[test]
-    fn sixel_flag_selects_sixel_mode() {
-        assert_eq!(parse(&["--sixel", "x"]).to_config().mode, RenderMode::Sixel);
-        assert_eq!(parse(&["-s", "x"]).to_config().mode, RenderMode::Sixel);
+    fn mode_flag_selects_sixel() {
+        assert_eq!(
+            parse(&["--mode", "sixel", "x"]).to_config().mode,
+            RenderMode::Sixel
+        );
+        assert_eq!(
+            parse(&["-M", "sixel", "x"]).to_config().mode,
+            RenderMode::Sixel
+        );
         assert_ne!(parse(&["x"]).to_config().mode, RenderMode::Sixel);
     }
 
     #[test]
-    fn sixel_conflicts_with_kitty_and_no_compact() {
-        assert!(Cli::try_parse_from(["qrtxt", "--sixel", "--kitty", "x"]).is_err());
-        assert!(Cli::try_parse_from(["qrtxt", "--sixel", "--no-compact", "x"]).is_err());
+    fn mode_defaults_to_auto_then_text_without_a_terminal() {
+        // `auto` is the parsed default; without a terminal to probe it lands on
+        // text, which is what the pure `run` path and these tests observe.
+        assert_eq!(parse(&["x"]).mode, Mode::Auto);
+        assert_eq!(parse(&["x"]).to_config().mode, RenderMode::Compact);
+        assert_eq!(
+            parse(&["--mode", "text", "x"]).to_config().mode,
+            RenderMode::Compact
+        );
+    }
+
+    #[test]
+    fn mode_rejects_unknown_value() {
+        assert!(Cli::try_parse_from(["qrtxt", "--mode", "dense", "x"]).is_err());
     }
 
     #[test]
     fn render_all_sixel_renders_one_sequence_per_code() {
-        let cfg = parse(&["--sixel", "-e", "L", "x"]).to_config();
+        let cfg = parse(&["--mode", "sixel", "-e", "L", "x"]).to_config();
         let codes =
             crate::encode::encode_multi(&vec![b'x'; 6000], cfg.ec, cfg.max_bytes, cfg.min_chunks)
                 .unwrap();

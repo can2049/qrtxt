@@ -100,6 +100,24 @@ pub fn response_ok(response: &[u8]) -> bool {
     response.windows(3).any(|window| window == b";OK")
 }
 
+/// Whether `response` contains a complete Kitty reply sequence (`ESC _ G` ...
+/// `ESC \`), regardless of verdict.
+///
+/// Distinguishes "the terminal answered the handshake" (so the reply stream is
+/// finished and the verdict is final) from "no reply yet".
+#[must_use]
+pub fn has_reply(response: &[u8]) -> bool {
+    let Some(at) = response
+        .windows(APC_START.len())
+        .position(|window| window == APC_START)
+    else {
+        return false;
+    };
+    response[at + APC_START.len()..]
+        .windows(APC_END.len())
+        .any(|window| window == APC_END)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -161,5 +179,16 @@ mod tests {
         assert!(response_ok(b"\x1b_Gi=1;OK\x1b\\"));
         assert!(!response_ok(b"\x1b_Gi=1;ENOTSUP\x1b\\"));
         assert!(!response_ok(b""));
+    }
+
+    #[test]
+    fn has_reply_needs_a_complete_sequence() {
+        assert!(has_reply(b"\x1b_Gi=1;OK\x1b\\"));
+        // A negative verdict is still a reply: the terminal answered.
+        assert!(has_reply(b"\x1b_Gi=1;ENOTSUP\x1b\\"));
+        // An unterminated sequence means no reply yet.
+        assert!(!has_reply(b"\x1b_Gi=1;OK"));
+        assert!(!has_reply(b""));
+        assert!(!has_reply(b"\x1b_Gi=1"));
     }
 }
