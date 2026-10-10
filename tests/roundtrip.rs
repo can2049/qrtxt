@@ -423,3 +423,132 @@ fn cjk_split_round_trips_in_order_without_symbol_loss() {
         assert_eq!(assembled, payload, "reassembly mismatch for {extra:?}");
     }
 }
+
+/// Find the first occurrence of `needle` in `haystack`.
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+/// Decode standard base64 (with `=` padding) back into bytes.
+fn base64_decode(input: &[u8]) -> Vec<u8> {
+    let value = |byte: u8| -> u32 {
+        match byte {
+            b'A'..=b'Z' => u32::from(byte - b'A'),
+            b'a'..=b'z' => u32::from(byte - b'a') + 26,
+            b'0'..=b'9' => u32::from(byte - b'0') + 52,
+            b'+' => 62,
+            b'/' => 63,
+            other => panic!("invalid base64 byte {other:?}"),
+        }
+    };
+    let mut out = Vec::new();
+    for chunk in input.chunks(4) {
+        let a = value(chunk[0]);
+        let b = value(chunk[1]);
+        let c = if chunk[2] == b'=' { 0 } else { value(chunk[2]) };
+        let d = if chunk[3] == b'=' { 0 } else { value(chunk[3]) };
+        let triple = (a << 18) | (b << 12) | (c << 6) | d;
+        out.push((triple >> 16) as u8);
+        if chunk[2] != b'=' {
+            out.push((triple >> 8) as u8);
+        }
+        if chunk[3] != b'=' {
+            out.push(triple as u8);
+        }
+    }
+    out
+}
+
+/// Parse a `render_kitty` sequence into the module grid (`side` x `side`;
+/// `true` marks a dark module, sampled from each module's centre pixel).
+///
+/// `invert` mirrors the flag passed to the renderer: when set, the dark modules
+/// are drawn white, so the meaning of a black pixel flips.
+fn parse_kitty(buf: &[u8], side: usize, invert: bool) -> Vec<bool> {
+    let mut base64 = Vec::new();
+    let mut rest = buf;
+    while let Some(start) = find_subslice(rest, b"\x1b_G") {
+        let after = &rest[start + 3..];
+        let semi = after
+            .iter()
+            .position(|&byte| byte == b';')
+            .expect("control;payload separator");
+        let data = &after[semi + 1..];
+        let end = find_subslice(data, b"\x1b\\").expect("payload terminator");
+        base64.extend_from_slice(&data[..end]);
+        rest = &data[end + 2..];
+    }
+    let rgb = base64_decode(&base64);
+    let image_px = ((rgb.len() / 3) as f64).sqrt().round() as usize;
+    assert_eq!(image_px * image_px, rgb.len() / 3, "image must be square");
+    assert_eq!(image_px % side, 0, "modules must tile the image exactly");
+    let module_px = image_px / side;
+
+    let mut ink = vec![false; side * side];
+    for module_y in 0..side {
+        for module_x in 0..side {
+            let x = module_x * module_px + module_px / 2;
+            let y = module_y * module_px + module_px / 2;
+            let offset = (y * image_px + x) * 3;
+            let black = rgb[offset] == 0 && rgb[offset + 1] == 0 && rgb[offset + 2] == 0;
+            ink[module_y * side + module_x] = black != invert;
+        }
+    }
+    ink
+}
+
+#[test]
+fn kitty_bitmap_round_trips() {
+    use qrtxt::types::Ec;
+
+    let cases: &[(&str, bool)] = &[
+        ("hello", false),
+        ("https://example.com/abc", false),
+        ("你好，世界", false),
+        ("hello", true),
+    ];
+    for &(payload, invert) in cases {
+        let codes = qrtxt::encode::encode_multi(payload.as_bytes(), Ec::L, None, None).unwrap();
+        assert_eq!(codes.len(), 1, "payload should fit one symbol");
+        let qr = &codes[0];
+
+        let mut buf = Vec::new();
+        qrtxt::render::render_kitty(qr, DEFAULT_BORDER as u32, invert, 424_242, &mut buf).unwrap();
+
+        let side = qr.width() + 2 * DEFAULT_BORDER;
+        let ink = parse_kitty(&buf, side, invert);
+        // `ink` marks dark modules, so decode as already-inverted.
+        let decoded = decode(side, side, &ink, qr.width(), true);
+        assert_eq!(decoded, payload, "invert={invert} payload={payload:?}");
+    }
+}
+
+#[test]
+fn kitty_multi_code_round_trips() {
+    use qrtxt::types::Ec;
+
+    // A payload split across several codes: each must render as its own
+    // decodable bitmap holding that code's (distinct) segment. Regression: when
+    // the codes shared one image id the terminal dropped every bitmap but the
+    // last, so earlier codes appeared unrendered.
+    let payload: String = (0..600).map(|i| (b'a' + (i % 26) as u8) as char).collect();
+    let codes = qrtxt::encode::encode_multi(payload.as_bytes(), Ec::L, None, Some(3)).unwrap();
+    assert!(codes.len() > 1, "payload should split into several codes");
+
+    let mut assembled = String::new();
+    for (index, qr) in codes.iter().enumerate() {
+        // A fresh id per code is what keeps every bitmap on screen.
+        let id = 424_242 + index as u32;
+        let mut buf = Vec::new();
+        qrtxt::render::render_kitty(qr, DEFAULT_BORDER as u32, false, id, &mut buf).unwrap();
+
+        let side = qr.width() + 2 * DEFAULT_BORDER;
+        let ink = parse_kitty(&buf, side, false);
+        let part = decode(side, side, &ink, qr.width(), true);
+        assert!(!part.is_empty(), "empty bitmap for code {}", index + 1);
+        assembled.push_str(&part);
+    }
+    assert_eq!(assembled, payload, "codes did not reassemble in order");
+}

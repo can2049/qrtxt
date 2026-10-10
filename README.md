@@ -35,6 +35,10 @@ $ qrtxt "hi"
 - **Three glyph sets** — half blocks (default), quadrants, braille — trading
   robustness for screen density.
 - **ANSI rendering** — `--no-compact` for terminals without block glyphs.
+- **Bitmap rendering** — `--kitty` draws a crisp black-and-white bitmap through
+  the Kitty graphics protocol, which can be smaller than the block-glyph
+  rendering (kitty, Ghostty, WezTerm); unsupported terminals fail fast instead
+  of printing garbage.
 - **Dark and light terminals** — `--invert` handles light backgrounds.
 - **Long payloads** — input too long for one symbol is split automatically across
   balanced codes; `--max-size` caps the bytes per code, `--chunk` sets a floor on
@@ -75,6 +79,7 @@ Options:
   -m, --max-size <BYTES>          Cap the payload of each QR code at BYTES bytes; implies splitting (default: the symbol's own limit)
   -c, --chunk <COUNT>             Split the payload across at least COUNT QR codes; advisory (default: no minimum)
   -a, --no-compact                Render with ANSI escape codes instead of Unicode block characters
+  -k, --kitty                     Draw a smaller QR as a bitmap through the Kitty graphics protocol
   -f, --file <PATH>               Read the payload from a file
   -p, --preserve-newline          Keep one trailing newline from file or piped input
   -b, --border <BORDER>           Quiet-zone width in modules; 0 removes the margin [default: 4]
@@ -109,6 +114,9 @@ qrtxt --border 1 "hello"
 # denser packing for narrow terminals
 qrtxt --glyphs braille "hello"
 
+# crisp black-and-white bitmap (needs a Kitty-protocol terminal)
+qrtxt --kitty "https://example.com"
+
 # light-background terminal
 qrtxt --invert "hello"
 
@@ -135,6 +143,23 @@ Block characters are drawn in the terminal's **foreground** color, so the defaul
 output assumes a dark-background terminal. On a light-background terminal the
 code would appear inverted, so pass `--invert` to restore a scannable
 dark-on-light code. `qrtxt` never queries the terminal background itself.
+
+## Kitty graphics protocol
+
+`--kitty` (`-k`) draws the code as a real bitmap using the
+[Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/)
+instead of Unicode glyphs, so it is not limited by how the font renders block
+characters and can be much smaller. It needs a terminal that implements the
+protocol — kitty, Ghostty,
+and WezTerm, for example. `qrtxt` probes the terminal with an `a=q` handshake
+first; if the protocol is unsupported (or standard output is not a terminal) it
+stops with a usage error rather than emit escape bytes the terminal cannot
+render. The output is pure black and white and carries its own white quiet zone,
+so `--invert` swaps the two colours while the code stays self-contained; the
+glyph set is ignored.
+
+The same probe runs for `--help`, so when standard output is a terminal the
+`--kitty` entry ends with a one-line verdict for the current terminal.
 
 ## Long payloads
 
@@ -177,13 +202,16 @@ The crate is layered so that dependencies point in one direction only:
 
 - `cli` parses arguments and orchestrates the run (`run` / `run_with`).
 - `input`, `encode`, and `render` are pure and do not depend on `clap`.
+- `kitty` holds the low-level protocol framing, shared by `cli` (the terminal
+  probe) and `render` (bitmap transmission).
 - `types` holds the shared value types; `error` maps failures to exit codes.
 
 Rendering happens in two steps: `build_ink` turns the QR matrix into a boolean
 "ink" grid (applying the quiet zone and inversion), and `render` packs that grid
-into character cells per glyph set. The round-trip test suite renders the output,
-reconstructs the module grid, and decodes it again with `rqrr` to prove the printed
-code is still scannable.
+into character cells per glyph set. `render_kitty` bypasses the grid and emits a
+black-and-white bitmap over the Kitty protocol. The round-trip test suite renders
+the output, reconstructs the module grid, and decodes it again with `rqrr` to
+prove the printed code is still scannable.
 
 ## License
 

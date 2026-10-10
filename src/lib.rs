@@ -9,7 +9,9 @@
 //! # Layering
 //!
 //! Dependencies point downward only:
-//! `cli` -> {`input`, `encode`, `render`} -> `types` / `error`.
+//! `cli` -> {`input`, `encode`, `render`} -> `types` / `error`, with the
+//! low-level `kitty` protocol helpers shared by `cli` (the terminal probe) and
+//! `render` (bitmap transmission).
 //! The domain modules are pure and never depend on `clap`; all side effects are
 //! confined to [`cli::run`] / [`cli::run_with`].
 
@@ -20,5 +22,6 @@ pub mod cli;
 pub mod encode;
 pub mod error;
 pub mod input;
+pub mod kitty;
 pub mod render;
 pub mod types;
