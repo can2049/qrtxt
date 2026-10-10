@@ -1,12 +1,21 @@
 //! Command-line interface: argument parsing (`Cli`) and orchestration (`run`).
+//!
+//! All argument parsing lives here; the Kitty capability probe lives in
+//! [`probe`] and the `--help` hint plumbing in [`help`]. Their public items are
+//! re-exported below so callers keep using the `cli::` path.
 
 use std::io::{IsTerminal, Write};
 
-use clap::{CommandFactory, Parser};
+use clap::Parser;
 use qrcode::QrCode;
 
 use crate::error::AppError;
 use crate::types::{Config, Ec, GlyphSet, InputSpec, RenderMode};
+
+mod help;
+mod probe;
+
+pub use help::{command_with_kitty_hint, kitty_support_hint};
 
 /// Turn text into a terminal QR code.
 #[derive(Debug, Parser)]
@@ -19,7 +28,7 @@ Reads a payload from a literal argument, a file, or standard input and prints it
 more QR codes drawn with Unicode block characters, so no graphics environment is needed — \
 just a UTF-8 terminal.\n\n\
 A payload too large for a single symbol is split automatically across several balanced codes, \
-printed in order under a `QR i/N` caption. Use --max-size to cap the bytes per code, or \
+printed in order under a `QR i/N` caption. Use --max-bytes to cap the bytes per code, or \
 --chunk to require a minimum number of codes.",
     after_help = "Source: https://github.com/can2049/qrtxt"
 )]
@@ -67,19 +76,19 @@ pub struct Cli {
     /// at least 1.
     #[arg(
         short = 'm',
-        long = "max-size",
+        long = "max-bytes",
         value_name = "BYTES",
         value_parser = clap::value_parser!(u32).range(1..)
     )]
-    pub max_size: Option<u32>,
+    pub max_bytes: Option<u32>,
 
     /// Split the payload across at least COUNT QR codes; advisory (default: no
     /// minimum).
     ///
     /// The payload is divided into COUNT balanced codes when the content allows,
     /// otherwise into as many codes as possible (at most one per character). Can be
-    /// combined with --max-size; whichever forces more codes wins. The value must be
-    /// at least 1.
+    /// combined with --max-bytes; whichever forces more codes wins. The value must
+    /// be at least 1.
     #[arg(
         short = 'c',
         long = "chunk",
@@ -166,7 +175,7 @@ impl Cli {
                 RenderMode::Compact
             },
             preserve_newline: self.preserve_newline,
-            max_size: self.max_size.map(|bytes| bytes as usize),
+            max_bytes: self.max_bytes.map(|bytes| bytes as usize),
             min_chunks: self.chunk.map(|count| count as usize),
         }
     }
@@ -176,7 +185,7 @@ impl Cli {
 pub fn run_with(cli: &Cli) -> Result<(), AppError> {
     let cfg = cli.to_config();
     if cfg.mode == RenderMode::Kitty {
-        ensure_kitty_supported()?;
+        probe::ensure_kitty_supported()?;
     }
     let mut stdin = std::io::stdin().lock();
     let mut stdout = std::io::stdout().lock();
@@ -192,7 +201,7 @@ pub fn run(
     stdin_is_tty: bool,
 ) -> Result<(), AppError> {
     let payload = crate::input::resolve(cfg, stdin, stdin_is_tty)?;
-    let codes = crate::encode::encode_multi(&payload, cfg.ec, cfg.max_size, cfg.min_chunks)?;
+    let codes = crate::encode::encode_multi(&payload, cfg.ec, cfg.max_bytes, cfg.min_chunks)?;
 
     let mut writer = std::io::BufWriter::new(stdout);
     if let Err(error) = render_all(cfg, &codes, &mut writer) {
@@ -227,7 +236,10 @@ fn render_all(cfg: &Config, codes: &[QrCode], out: &mut dyn std::io::Write) -> s
                 crate::render::render(&frame, cfg.glyphs, out)?;
             }
             RenderMode::Ansi => {
-                let frame = crate::render::build_ink(qr, cfg.border, cfg.invert, cfg.glyphs);
+                // ANSI draws one module per two spaces and ignores the glyph set,
+                // so pin the frame's tile to the smallest one: the output is then
+                // independent of `--glyphs` instead of shifting with it.
+                let frame = crate::render::build_ink(qr, cfg.border, cfg.invert, GlyphSet::Half);
                 crate::render::render_ansi(&frame, out)?;
             }
         }
@@ -236,164 +248,6 @@ fn render_all(cfg: &Config, codes: &[QrCode], out: &mut dyn std::io::Write) -> s
         }
     }
     Ok(())
-}
-
-/// Image id used for the capability probe, kept well clear of the display range.
-const KITTY_PROBE_ID: u32 = 1_000_000;
-
-/// Ensure the current terminal implements the Kitty graphics protocol (FR-3.12).
-///
-/// The probe runs an `a=q` handshake over the controlling terminal, so the reply
-/// is read without disturbing the payload stream (which may arrive on stdin). A
-/// terminal that cannot draw the bitmap is a hard error: printing escape bytes it
-/// cannot interpret would only spew garbage.
-fn ensure_kitty_supported() -> Result<(), AppError> {
-    match probe_kitty_terminal()? {
-        Some(true) => Ok(()),
-        Some(false) => Err(AppError::Usage(
-            "kitty: this terminal does not support the Kitty graphics protocol \
-             (try kitty, Ghostty, or WezTerm)"
-                .to_string(),
-        )),
-        None => Err(AppError::Usage(
-            "kitty: standard output is not a terminal".to_string(),
-        )),
-    }
-}
-
-/// Probe the controlling terminal for Kitty graphics support (FR-3.12).
-///
-/// Returns `Ok(None)` when there is no terminal to ask (standard output is not a
-/// terminal); otherwise `Ok(Some(true/false))` from the `a=q` handshake.
-fn probe_kitty_terminal() -> Result<Option<bool>, AppError> {
-    if !std::io::stdout().is_terminal() {
-        return Ok(None);
-    }
-    let mut tty = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open("/dev/tty")
-        .map_err(|source| AppError::Io {
-            context: "kitty: cannot open the controlling terminal",
-            source,
-        })?;
-    probe_kitty(&mut tty)
-        .map(Some)
-        .map_err(|source| AppError::Io {
-            context: "kitty: cannot query the terminal",
-            source,
-        })
-}
-
-/// A one-line hint about the current terminal's Kitty support, for `--help`
-/// (FR-3.12).
-///
-/// Runs the same `a=q` handshake as [`run_with`], but never fails: it returns
-/// `None` when there is no terminal to probe or the probe errors, so the help
-/// text stays truthful rather than guessing.
-#[must_use]
-pub fn kitty_support_hint() -> Option<String> {
-    hint_for(probe_kitty_terminal().ok().flatten())
-}
-
-/// Map a probe result to the help hint; `None` means there was nothing to probe.
-fn hint_for(support: Option<bool>) -> Option<String> {
-    match support {
-        Some(true) => Some("This terminal supports it.".to_string()),
-        Some(false) => Some("This terminal does not support it.".to_string()),
-        None => None,
-    }
-}
-
-/// The clap command with a live Kitty support `hint` appended to the `--kitty`
-/// option's help.
-///
-/// Used only when help is being shown, so the probe cost is paid once. The short
-/// and long help both gain the hint.
-#[must_use]
-pub fn command_with_kitty_hint(hint: &str) -> clap::Command {
-    Cli::command().mut_arg("kitty", |arg| {
-        let short = arg.get_help().map(ToString::to_string).unwrap_or_default();
-        let long = arg
-            .get_long_help()
-            .map(ToString::to_string)
-            .unwrap_or_else(|| short.clone());
-        // clap strips the trailing stop from the short help, so restore it before
-        // appending, otherwise the two sentences run together.
-        arg.help(format!("{} {hint}", end_with_period(short.trim_end())))
-            .long_help(format!("{}\n\n{hint}", long.trim_end()))
-    })
-}
-
-/// `text` with a trailing full stop, adding one only when it is missing.
-fn end_with_period(text: &str) -> String {
-    if text.ends_with('.') {
-        text.to_string()
-    } else {
-        format!("{text}.")
-    }
-}
-
-/// Send the support query and read the reply in raw mode, with a short timeout.
-fn probe_kitty(tty: &mut std::fs::File) -> std::io::Result<bool> {
-    use std::io::Read as _;
-    use std::os::fd::AsFd as _;
-    use std::time::{Duration, Instant};
-
-    use rustix::termios::{OptionalActions, SpecialCodeIndex, tcgetattr, tcsetattr};
-
-    let original = tcgetattr(tty.as_fd())?;
-    // A duplicate handle restores the attributes on the way out without holding a
-    // borrow of `tty`, which stays free for reading and writing.
-    let _guard = TermiosGuard {
-        tty: tty.try_clone()?,
-        original: original.clone(),
-    };
-
-    let mut raw = original;
-    raw.make_raw();
-    raw.special_codes[SpecialCodeIndex::VMIN] = 0;
-    raw.special_codes[SpecialCodeIndex::VTIME] = 1; // 0.1s between reads
-    tcsetattr(tty.as_fd(), OptionalActions::Now, &raw)?;
-
-    tty.write_all(&crate::kitty::query(KITTY_PROBE_ID))?;
-    tty.flush()?;
-
-    let deadline = Instant::now() + Duration::from_millis(300);
-    let mut response = Vec::new();
-    let mut byte = [0u8; 1];
-    while Instant::now() < deadline {
-        match tty.read(&mut byte) {
-            Ok(0) => {} // the read timed out with no data
-            Ok(_) => {
-                response.push(byte[0]);
-                if response.ends_with(b"\x1b\\") {
-                    break;
-                }
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(error) => return Err(error),
-        }
-    }
-    Ok(crate::kitty::response_ok(&response))
-}
-
-/// Restores the terminal's saved attributes when dropped, even on early return.
-struct TermiosGuard {
-    tty: std::fs::File,
-    original: rustix::termios::Termios,
-}
-
-impl Drop for TermiosGuard {
-    fn drop(&mut self) {
-        use std::os::fd::AsFd as _;
-
-        let _ = rustix::termios::tcsetattr(
-            self.tty.as_fd(),
-            rustix::termios::OptionalActions::Now,
-            &self.original,
-        );
-    }
 }
 
 fn map_write_error(error: std::io::Error) -> Result<(), AppError> {
@@ -455,7 +309,7 @@ mod tests {
         assert!(cfg.invert);
         assert_eq!(cfg.glyphs, GlyphSet::Braille);
         assert_eq!(cfg.border, 4);
-        assert_eq!(cfg.max_size, None);
+        assert_eq!(cfg.max_bytes, None);
         assert_eq!(cfg.ec, Ec::L);
     }
 
@@ -471,26 +325,26 @@ mod tests {
         assert_eq!(cfg.glyphs, GlyphSet::Half);
         assert_eq!(cfg.ec, Ec::H);
         assert_eq!(cfg.border, 2);
-        assert_eq!(cfg.max_size, Some(9));
+        assert_eq!(cfg.max_bytes, Some(9));
     }
 
     #[test]
-    fn max_size_defaults_to_none() {
-        assert_eq!(parse(&["x"]).to_config().max_size, None);
+    fn max_bytes_defaults_to_none() {
+        assert_eq!(parse(&["x"]).to_config().max_bytes, None);
     }
 
     #[test]
-    fn max_size_parses_long_and_short() {
+    fn max_bytes_parses_long_and_short() {
         assert_eq!(
-            parse(&["--max-size", "100", "x"]).to_config().max_size,
+            parse(&["--max-bytes", "100", "x"]).to_config().max_bytes,
             Some(100)
         );
-        assert_eq!(parse(&["-m", "100", "x"]).to_config().max_size, Some(100));
+        assert_eq!(parse(&["-m", "100", "x"]).to_config().max_bytes, Some(100));
     }
 
     #[test]
-    fn max_size_zero_is_rejected() {
-        assert!(Cli::try_parse_from(["qrtxt", "--max-size", "0", "x"]).is_err());
+    fn max_bytes_zero_is_rejected() {
+        assert!(Cli::try_parse_from(["qrtxt", "--max-bytes", "0", "x"]).is_err());
     }
 
     #[test]
@@ -516,7 +370,7 @@ mod tests {
     fn render_all_captions_multiple_codes() {
         let cfg = parse(&["-e", "L", "x"]).to_config();
         let codes =
-            crate::encode::encode_multi(&vec![b'x'; 4000], cfg.ec, cfg.max_size, cfg.min_chunks)
+            crate::encode::encode_multi(&vec![b'x'; 4000], cfg.ec, cfg.max_bytes, cfg.min_chunks)
                 .unwrap();
         assert!(codes.len() > 1);
         let mut out = Vec::new();
@@ -530,12 +384,30 @@ mod tests {
     fn render_all_leaves_a_single_code_uncaptioned() {
         let cfg = parse(&["x"]).to_config();
         let codes =
-            crate::encode::encode_multi(b"hello", cfg.ec, cfg.max_size, cfg.min_chunks).unwrap();
+            crate::encode::encode_multi(b"hello", cfg.ec, cfg.max_bytes, cfg.min_chunks).unwrap();
         assert_eq!(codes.len(), 1);
         let mut out = Vec::new();
         render_all(&cfg, &codes, &mut out).unwrap();
         let text = String::from_utf8(out).unwrap();
         assert!(!text.contains("QR "), "{text}");
+    }
+
+    #[test]
+    fn ansi_output_is_independent_of_the_glyph_set() {
+        // Regression: ANSI ignores the glyph set, but the frame was still padded
+        // to the chosen glyph's tile, so `-a -g braille` gained blank rows over
+        // `-a`. The frame now uses the smallest tile in ANSI mode, so they match.
+        let ansi = parse(&["-a", "hi"]).to_config();
+        let braille = parse(&["-a", "-g", "braille", "hi"]).to_config();
+        assert_eq!(braille.mode, RenderMode::Ansi);
+        let codes =
+            crate::encode::encode_multi(b"hi", ansi.ec, ansi.max_bytes, ansi.min_chunks).unwrap();
+        let draw = |cfg: &Config| {
+            let mut out = Vec::new();
+            render_all(cfg, &codes, &mut out).unwrap();
+            out
+        };
+        assert_eq!(draw(&ansi), draw(&braille));
     }
 
     #[test]
@@ -546,7 +418,7 @@ mod tests {
         // distinct id, in order.
         let cfg = parse(&["-k", "-e", "L", "x"]).to_config();
         let codes =
-            crate::encode::encode_multi(&vec![b'x'; 6000], cfg.ec, cfg.max_size, cfg.min_chunks)
+            crate::encode::encode_multi(&vec![b'x'; 6000], cfg.ec, cfg.max_bytes, cfg.min_chunks)
                 .unwrap();
         assert!(codes.len() >= 3, "payload should split into several codes");
 
@@ -593,7 +465,7 @@ mod tests {
             "Q",
             "--border",
             "1",
-            "--max-size",
+            "--max-bytes",
             "7",
             "--chunk",
             "4",
@@ -606,7 +478,7 @@ mod tests {
         assert_eq!(cfg.glyphs, GlyphSet::Quadrant);
         assert_eq!(cfg.ec, Ec::Q);
         assert_eq!(cfg.border, 1);
-        assert_eq!(cfg.max_size, Some(7));
+        assert_eq!(cfg.max_bytes, Some(7));
         assert_eq!(cfg.min_chunks, Some(4));
     }
 
@@ -638,29 +510,5 @@ mod tests {
     #[test]
     fn kitty_conflicts_with_no_compact() {
         assert!(Cli::try_parse_from(["qrtxt", "--kitty", "--no-compact", "x"]).is_err());
-    }
-
-    #[test]
-    fn support_hint_reflects_the_probe_result() {
-        // Tested through the pure mapping: the live probe depends on the ambient
-        // terminal, which would make this test fail under an interactive one.
-        assert_eq!(hint_for(None), None);
-        assert!(hint_for(Some(true)).unwrap().contains("supports it"));
-        assert!(hint_for(Some(false)).unwrap().contains("does not support"));
-    }
-
-    #[test]
-    fn kitty_hint_is_appended_to_both_help_forms() {
-        let hint = "This terminal supports the Kitty graphics protocol.";
-        let mut command = command_with_kitty_hint(hint);
-
-        let short = command.render_help().to_string();
-        assert!(short.contains("--kitty"), "{short}");
-        // The stripped stop is restored so the hint starts a new sentence.
-        assert!(short.contains(". This terminal supports"), "{short}");
-
-        let long = command.render_long_help().to_string();
-        assert!(long.contains("--kitty"), "{long}");
-        assert!(long.contains(hint), "{long}");
     }
 }

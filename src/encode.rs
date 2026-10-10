@@ -111,7 +111,8 @@ pub fn encode(data: &[u8], ec: Ec) -> Result<QrCode, AppError> {
 /// Encode `data`, splitting it across as many QR codes as needed.
 ///
 /// Each code holds at most `max_bytes` payload bytes (when `None`, the most a
-/// single symbol can hold), and the payload is spread across at least
+/// single symbol can hold; a value below 1 is treated as 1), and the payload is
+/// spread across at least
 /// `min_chunks` codes when the content allows (advisory; one code per character
 /// is the ceiling). The chunks are as evenly sized as capacity allows, and when
 /// `data` is valid UTF-8 the cuts retreat to character boundaries, so a
@@ -138,7 +139,9 @@ const BALANCE_SLACK: usize = 8;
 /// when the content allows.
 ///
 /// The effective byte cap is `max_bytes` clamped to the content's own per-symbol
-/// limit. The fewest symbols that can hold `data` under that cap is a lower
+/// limit and floored at one byte, so a zero or tiny cap yields one byte (or one
+/// whole character) per code rather than dividing by zero. The fewest symbols
+/// that can hold `data` under that cap is a lower
 /// bound; `min_chunks` raises it (advisory, capped at one code per character).
 /// An even cut at that count (or up to [`BALANCE_SLACK`] more, when a
 /// content-dependent mode makes an even cut unencodable) is preferred. A greedy
@@ -150,7 +153,11 @@ fn split_chunks(
     min_chunks: Option<usize>,
 ) -> Vec<&[u8]> {
     let capacity = max_prefix_fitting(data, ec).max(1);
-    let cap = max_bytes.map_or(capacity, |bytes| bytes.min(capacity));
+    // Floor the cap at one byte so a zero (or absent) `max_bytes` cannot reach
+    // `div_ceil(0)` below; a zero cap splits one byte per code instead of panicking.
+    let cap = max_bytes
+        .map_or(capacity, |bytes| bytes.min(capacity))
+        .max(1);
     let text = std::str::from_utf8(data).ok();
     // A code must hold at least one character (or byte), so this bounds the count.
     let most = text.map_or(data.len(), |text| text.chars().count()).max(1);
@@ -343,7 +350,7 @@ mod tests {
     }
 
     #[test]
-    fn max_size_caps_and_balances_every_chunk() {
+    fn max_bytes_caps_and_balances_every_chunk() {
         let data = vec![b'a'; 250];
         let chunks = split_chunks(&data, Ec::L, Some(100), None);
         let sizes: Vec<usize> = chunks.iter().map(|chunk| chunk.len()).collect();
@@ -358,12 +365,12 @@ mod tests {
     }
 
     #[test]
-    fn max_size_keeps_a_fitting_payload_as_one_code() {
+    fn max_bytes_keeps_a_fitting_payload_as_one_code() {
         assert_eq!(split_chunks(&[b'a'; 50], Ec::L, Some(1000), None).len(), 1);
     }
 
     #[test]
-    fn max_size_splits_a_small_payload() {
+    fn max_bytes_splits_a_small_payload() {
         let payload = b"abcdefghij";
         let chunks = split_chunks(payload, Ec::L, Some(4), None);
         assert_eq!(chunks.len(), 3);
@@ -372,7 +379,7 @@ mod tests {
     }
 
     #[test]
-    fn max_size_above_the_symbol_limit_is_clamped() {
+    fn max_bytes_above_the_symbol_limit_is_clamped() {
         let data = vec![b'a'; 4000];
         let chunks = split_chunks(&data, Ec::L, Some(9000), None);
         assert_eq!(chunks.len(), 2, "clamped cap matches the symbol limit");
@@ -381,9 +388,21 @@ mod tests {
     }
 
     #[test]
-    fn encode_multi_honors_max_size() {
+    fn encode_multi_honors_max_bytes() {
         let codes = encode_multi(&vec![b'a'; 250], Ec::L, Some(100), None).unwrap();
         assert_eq!(codes.len(), 3);
+    }
+
+    #[test]
+    fn zero_max_bytes_is_floored_instead_of_panicking() {
+        // Regression: a zero cap used to reach `div_ceil(0)` and panic. It is
+        // floored to one byte, so the payload still splits (one byte, or one
+        // whole character, per code) and no character is divided.
+        let ascii = encode_multi(b"abc", Ec::L, Some(0), None).unwrap();
+        assert_eq!(ascii.len(), 3, "one byte per code");
+
+        let cjk = encode_multi("汉字".as_bytes(), Ec::L, Some(0), None).unwrap();
+        assert_eq!(cjk.len(), 2, "one whole character per code");
     }
 
     #[test]
@@ -409,7 +428,7 @@ mod tests {
     }
 
     #[test]
-    fn chunk_combines_with_max_size() {
+    fn chunk_combines_with_max_bytes() {
         let data = vec![b'a'; 1000];
         let chunks = split_chunks(&data, Ec::L, Some(300), Some(5));
         let sizes: Vec<usize> = chunks.iter().map(|chunk| chunk.len()).collect();
