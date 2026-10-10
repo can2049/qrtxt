@@ -5,6 +5,7 @@
 [English](README.md) | **简体中文**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![crates.io](https://img.shields.io/crates/v/qrtxt.svg)](https://crates.io/crates/qrtxt)
 
 `qrtxt` 读取字符串、文件或管道输入,用 Unicode 块字符在标准输出上打印一个普通
 二维码。无需图形环境,只要有 UTF-8 终端即可。
@@ -41,6 +42,12 @@ $ qrtxt "hi"
 
 ## 安装
 
+`qrtxt` 已发布到 [crates.io](https://crates.io/crates/qrtxt),可直接安装:
+
+```console
+cargo install qrtxt
+```
+
 从源码构建:
 
 ```console
@@ -50,7 +57,7 @@ cargo build --release
 # 产物在 target/release/qrtxt
 ```
 
-或用 Cargo 直接安装:
+或从本地目录用 Cargo 安装:
 
 ```console
 cargo install --path .

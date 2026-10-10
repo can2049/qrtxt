@@ -5,6 +5,7 @@ Turn text into a QR code, right in your terminal.
 **English** | [简体中文](README.zh-CN.md)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![crates.io](https://img.shields.io/crates/v/qrtxt.svg)](https://crates.io/crates/qrtxt)
 
 `qrtxt` reads a string, a file, or piped input and prints an ordinary QR code
 using Unicode block characters. No graphics environment is required — just a
@@ -48,6 +49,13 @@ $ qrtxt "hi"
 
 ## Install
 
+`qrtxt` is published on [crates.io](https://crates.io/crates/qrtxt). Install it
+straight from there:
+
+```console
+cargo install qrtxt
+```
+
 From a clone:
 
 ```console
@@ -57,7 +65,7 @@ cargo build --release
 # binary at target/release/qrtxt
 ```
 
-Or install directly with Cargo:
+Or install a local checkout with Cargo:
 
 ```console
 cargo install --path .
