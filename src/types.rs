@@ -78,6 +78,44 @@ pub enum RenderMode {
     Sixel,
 }
 
+/// Render mode chosen on the command line (FR-3.10).
+///
+/// The user-facing counterpart of [`RenderMode`]: it adds [`Mode::Auto`], a
+/// policy resolved against the terminal's graphics capabilities in
+/// [`crate::cli::run_with`]. The concrete [`RenderMode`] it maps to never
+/// carries an "auto" state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    /// Use a bitmap when the terminal supports one, else text (the default).
+    Auto,
+    /// Unicode block/glyph text rendering.
+    Text,
+    /// ANSI escape-code text rendering.
+    Ansi,
+    /// Bitmap via the Kitty graphics protocol.
+    Kitty,
+    /// Bitmap via the Sixel graphics protocol.
+    Sixel,
+}
+
+impl FromStr for Mode {
+    type Err = String;
+
+    /// Parses a case-insensitive mode name (`"auto"`, `"Text"`, ...).
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "auto" => Ok(Mode::Auto),
+            "text" => Ok(Mode::Text),
+            "ansi" => Ok(Mode::Ansi),
+            "kitty" => Ok(Mode::Kitty),
+            "sixel" => Ok(Mode::Sixel),
+            _ => Err(format!(
+                "invalid mode: {s} (expected auto|text|ansi|kitty|sixel)"
+            )),
+        }
+    }
+}
+
 /// Where the payload is read from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InputSpec {
@@ -136,5 +174,20 @@ mod tests {
         assert_eq!("h".parse::<GlyphSet>(), Ok(GlyphSet::Half));
         assert_eq!("Q".parse::<GlyphSet>(), Ok(GlyphSet::Quadrant));
         assert_eq!("b".parse::<GlyphSet>(), Ok(GlyphSet::Braille));
+    }
+
+    #[test]
+    fn mode_parses_case_insensitively() {
+        assert_eq!("auto".parse::<Mode>(), Ok(Mode::Auto));
+        assert_eq!("Text".parse::<Mode>(), Ok(Mode::Text));
+        assert_eq!("ANSI".parse::<Mode>(), Ok(Mode::Ansi));
+        assert_eq!("kitty".parse::<Mode>(), Ok(Mode::Kitty));
+        assert_eq!("Sixel".parse::<Mode>(), Ok(Mode::Sixel));
+    }
+
+    #[test]
+    fn mode_rejects_unknown() {
+        assert!("blocks".parse::<Mode>().is_err());
+        assert!("".parse::<Mode>().is_err());
     }
 }

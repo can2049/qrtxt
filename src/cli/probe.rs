@@ -1,13 +1,20 @@
 //! Graphics-protocol capability probes (FR-3.12, FR-3.13).
 //!
-//! Both probes read from the controlling terminal, so the reply never disturbs
-//! the payload stream (which may arrive on stdin). A terminal that cannot draw
-//! the bitmap is a hard error: printing escape bytes it cannot interpret would
-//! only spew garbage.
+//! A probe reads from the controlling terminal, so the reply never disturbs the
+//! payload stream (which may arrive on stdin). A terminal that cannot draw the
+//! bitmap is a hard error: printing escape bytes it cannot interpret would only
+//! spew garbage.
 //!
 //! Kitty answers an `a=q` handshake with `;OK`; Sixel has no such round trip, so
 //! its support is inferred from the DA1 (Primary Device Attributes) reply, which
 //! lists device attribute `4` when Sixel is available.
+//!
+//! Both protocols are asked **in a single round trip** ([`probe_capabilities`]):
+//! the two queries are written back-to-back and one reader collects the replies
+//! until both verdicts are final or the deadline passes. Probing both
+//! concurrently is not an option — they share one `/dev/tty` input stream, so
+//! concurrent readers would race for the same bytes and the raw-mode termios
+//! writes.
 
 use std::io::{IsTerminal, Write};
 use std::time::Duration;
@@ -18,23 +25,77 @@ use crate::error::AppError;
 /// range.
 const KITTY_PROBE_ID: u32 = 1_000_000;
 
-/// How long to wait for a probe reply before giving up.
+/// How long to wait for probe replies before giving up.
 const PROBE_TIMEOUT: Duration = Duration::from_millis(300);
+
+/// Terminal graphics capabilities discovered by a probe.
+pub(super) struct Capabilities {
+    /// The terminal implements the Kitty graphics protocol.
+    pub(super) kitty: bool,
+    /// The terminal advertises Sixel graphics (device attribute `4`).
+    pub(super) sixel: bool,
+}
+
+/// Probe the terminal for both graphics protocols in one round trip (FR-3.12,
+/// FR-3.13).
+///
+/// Returns `Ok(None)` when there is no terminal to ask (standard output is not a
+/// terminal); otherwise both verdicts. Waits for both replies (or the deadline),
+/// so the result is complete for `--help`.
+pub(super) fn probe_capabilities() -> Result<Option<Capabilities>, AppError> {
+    let kitty_query = crate::kitty::query(KITTY_PROBE_ID);
+    let da1_query = crate::sixel::da1_query();
+    let buffer = round_trip(
+        "cannot open the controlling terminal",
+        "cannot query the terminal",
+        &[&kitty_query, &da1_query],
+        |buffer| crate::kitty::has_reply(buffer) && crate::sixel::has_reply(buffer),
+    )?;
+    Ok(buffer.map(|buffer| capabilities_of(&buffer)))
+}
+
+/// Probe the terminal for the best protocol to use for [`crate::types::Mode::Auto`]
+/// (FR-3.12, FR-3.13).
+///
+/// Like [`probe_capabilities`], but stops as soon as Kitty is confirmed (it is
+/// strictly preferred, so the Sixel verdict is irrelevant then). Returns
+/// `Ok(None)` when there is no terminal to ask.
+pub(super) fn probe_for_auto() -> Result<Option<Capabilities>, AppError> {
+    let kitty_query = crate::kitty::query(KITTY_PROBE_ID);
+    let da1_query = crate::sixel::da1_query();
+    let buffer = round_trip(
+        "cannot open the controlling terminal",
+        "cannot query the terminal",
+        &[&kitty_query, &da1_query],
+        |buffer| {
+            crate::kitty::response_ok(buffer)
+                || (crate::kitty::has_reply(buffer) && crate::sixel::has_reply(buffer))
+        },
+    )?;
+    Ok(buffer.map(|buffer| capabilities_of(&buffer)))
+}
 
 /// Ensure the current terminal implements the Kitty graphics protocol (FR-3.12).
 ///
 /// A terminal that cannot draw the bitmap is a hard error: printing escape bytes
 /// it cannot interpret would only spew garbage.
 pub(super) fn ensure_kitty_supported() -> Result<(), AppError> {
-    match probe_kitty_terminal()? {
-        Some(true) => Ok(()),
-        Some(false) => Err(AppError::Usage(
+    let kitty_query = crate::kitty::query(KITTY_PROBE_ID);
+    let buffer = round_trip(
+        "kitty: cannot open the controlling terminal",
+        "kitty: cannot query the terminal",
+        &[&kitty_query],
+        crate::kitty::has_reply,
+    )?;
+    match buffer {
+        None => Err(AppError::Usage(
+            "kitty: standard output is not a terminal".to_string(),
+        )),
+        Some(buffer) if crate::kitty::response_ok(&buffer) => Ok(()),
+        Some(_) => Err(AppError::Usage(
             "kitty: this terminal does not support the Kitty graphics protocol \
              (try kitty, Ghostty, or WezTerm)"
                 .to_string(),
-        )),
-        None => Err(AppError::Usage(
-            "kitty: standard output is not a terminal".to_string(),
         )),
     }
 }
@@ -46,59 +107,49 @@ pub(super) fn ensure_kitty_supported() -> Result<(), AppError> {
 /// best-effort: a terminal that supports Sixel without advertising it is treated
 /// as unsupported, so we never print escape bytes a terminal cannot draw.
 pub(super) fn ensure_sixel_supported() -> Result<(), AppError> {
-    match probe_sixel_terminal()? {
-        Some(true) => Ok(()),
-        Some(false) => Err(AppError::Usage(
+    let da1_query = crate::sixel::da1_query();
+    let buffer = round_trip(
+        "sixel: cannot open the controlling terminal",
+        "sixel: cannot query the terminal",
+        &[&da1_query],
+        crate::sixel::has_reply,
+    )?;
+    match buffer {
+        None => Err(AppError::Usage(
+            "sixel: standard output is not a terminal".to_string(),
+        )),
+        Some(buffer) if crate::sixel::response_has_sixel(&buffer) => Ok(()),
+        Some(_) => Err(AppError::Usage(
             "sixel: this terminal does not advertise Sixel graphics support \
              (try xterm, Konsole, foot, or Windows Terminal)"
                 .to_string(),
         )),
-        None => Err(AppError::Usage(
-            "sixel: standard output is not a terminal".to_string(),
-        )),
     }
 }
 
-/// Probe the controlling terminal for Kitty graphics support (FR-3.12).
+/// Verdict both protocols from a collected reply buffer.
+fn capabilities_of(buffer: &[u8]) -> Capabilities {
+    Capabilities {
+        kitty: crate::kitty::response_ok(buffer),
+        sixel: crate::sixel::response_has_sixel(buffer),
+    }
+}
+
+/// Send every query in `queries` to the controlling terminal at once and read
+/// until `done` is satisfied or the deadline passes.
 ///
 /// Returns `Ok(None)` when there is no terminal to ask (standard output is not a
-/// terminal); otherwise `Ok(Some(true/false))` from the `a=q` handshake.
-pub(super) fn probe_kitty_terminal() -> Result<Option<bool>, AppError> {
-    probe_terminal(
-        "kitty: cannot open the controlling terminal",
-        "kitty: cannot query the terminal",
-        crate::kitty::query(KITTY_PROBE_ID),
-        b"\x1b\\",
-        crate::kitty::response_ok,
-    )
-}
-
-/// Probe the controlling terminal for Sixel graphics support (FR-3.13).
-///
-/// Returns `Ok(None)` when there is no terminal to ask; otherwise
-/// `Ok(Some(true/false))` from the DA1 reply.
-pub(super) fn probe_sixel_terminal() -> Result<Option<bool>, AppError> {
-    probe_terminal(
-        "sixel: cannot open the controlling terminal",
-        "sixel: cannot query the terminal",
-        crate::sixel::da1_query(),
-        b"c",
-        crate::sixel::response_has_sixel,
-    )
-}
-
-/// Send `query` to the controlling terminal and verdict the reply.
-///
-/// The two protocol probes differ only in the bytes they send, the terminator
-/// that ends the reply, and how the reply is interpreted, so they share this
-/// driver. `Ok(None)` means there was no terminal to ask.
-fn probe_terminal(
+/// terminal). Sharing one round trip means `auto` pays a single timeout window
+/// for both protocols instead of chaining two.
+fn round_trip<F>(
     open_context: &'static str,
     query_context: &'static str,
-    query: Vec<u8>,
-    terminator: &[u8],
-    verdict: impl Fn(&[u8]) -> bool,
-) -> Result<Option<bool>, AppError> {
+    queries: &[&[u8]],
+    done: F,
+) -> Result<Option<Vec<u8>>, AppError>
+where
+    F: Fn(&[u8]) -> bool,
+{
     if !std::io::stdout().is_terminal() {
         return Ok(None);
     }
@@ -110,7 +161,7 @@ fn probe_terminal(
             context: open_context,
             source,
         })?;
-    probe(&mut tty, &query, terminator, verdict)
+    probe(&mut tty, queries, &done)
         .map(Some)
         .map_err(|source| AppError::Io {
             context: query_context,
@@ -118,13 +169,11 @@ fn probe_terminal(
         })
 }
 
-/// Send `query` and read the reply in raw mode, with a short timeout.
-fn probe(
-    tty: &mut std::fs::File,
-    query: &[u8],
-    terminator: &[u8],
-    verdict: impl Fn(&[u8]) -> bool,
-) -> std::io::Result<bool> {
+/// Write `queries` and read the reply in raw mode, with a short timeout.
+fn probe<F>(tty: &mut std::fs::File, queries: &[&[u8]], done: &F) -> std::io::Result<Vec<u8>>
+where
+    F: Fn(&[u8]) -> bool,
+{
     use std::os::fd::AsFd as _;
 
     use rustix::termios::{OptionalActions, SpecialCodeIndex, tcgetattr, tcsetattr};
@@ -143,23 +192,23 @@ fn probe(
     raw.special_codes[SpecialCodeIndex::VTIME] = 1; // 0.1s between reads
     tcsetattr(tty.as_fd(), OptionalActions::Now, &raw)?;
 
-    tty.write_all(query)?;
+    for query in queries {
+        tty.write_all(query)?;
+    }
     tty.flush()?;
 
-    let response = read_reply_until(tty, PROBE_TIMEOUT, terminator)?;
-    Ok(verdict(&response))
+    read_until(tty, PROBE_TIMEOUT, done)
 }
 
-/// Read from `tty` until `terminator` arrives or `timeout` elapses, whichever
-/// comes first, and return the bytes read.
+/// Read from `tty` until `done` accepts the accumulated bytes or `timeout`
+/// elapses, whichever comes first, and return the bytes read.
 ///
 /// The caller must first put `tty` in raw mode with a read timeout (`VMIN` /
 /// `VTIME`), so each read returns promptly instead of blocking for input.
-fn read_reply_until(
-    tty: &mut std::fs::File,
-    timeout: Duration,
-    terminator: &[u8],
-) -> std::io::Result<Vec<u8>> {
+fn read_until<F>(tty: &mut std::fs::File, timeout: Duration, done: &F) -> std::io::Result<Vec<u8>>
+where
+    F: Fn(&[u8]) -> bool,
+{
     use std::io::Read as _;
     use std::time::Instant;
 
@@ -171,7 +220,7 @@ fn read_reply_until(
             Ok(0) => {} // the read timed out with no data
             Ok(_) => {
                 response.push(byte[0]);
-                if response.ends_with(terminator) {
+                if done(&response) {
                     break;
                 }
             }

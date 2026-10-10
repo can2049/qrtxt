@@ -186,10 +186,10 @@ fn short_help_advertises_the_source_url() {
 }
 
 #[test]
-fn kitty_requires_a_terminal() {
+fn kitty_mode_requires_a_terminal() {
     // Under the test harness stdout is a pipe, so the guard fires before any probe.
     qrtxt()
-        .args(["--kitty", "hello"])
+        .args(["--mode", "kitty", "hello"])
         .assert()
         .failure()
         .code(2)
@@ -197,19 +197,10 @@ fn kitty_requires_a_terminal() {
 }
 
 #[test]
-fn kitty_conflicts_with_no_compact() {
-    qrtxt()
-        .args(["--kitty", "--no-compact", "hello"])
-        .assert()
-        .failure()
-        .code(2);
-}
-
-#[test]
-fn sixel_requires_a_terminal() {
+fn sixel_mode_requires_a_terminal() {
     // Under the test harness stdout is a pipe, so the guard fires before any probe.
     qrtxt()
-        .args(["--sixel", "hello"])
+        .args(["--mode", "sixel", "hello"])
         .assert()
         .failure()
         .code(2)
@@ -217,27 +208,35 @@ fn sixel_requires_a_terminal() {
 }
 
 #[test]
-fn sixel_conflicts_with_kitty_and_no_compact() {
+fn auto_falls_back_to_text_without_a_terminal() {
+    // A piped run must never receive bitmap escape bytes: `auto` resolves to text.
+    assert_eq!(stdout(&["hello"]), stdout(&["--mode", "text", "hello"]));
+}
+
+#[test]
+fn unknown_mode_exits_two() {
     qrtxt()
-        .args(["--sixel", "--kitty", "hello"])
-        .assert()
-        .failure()
-        .code(2);
-    qrtxt()
-        .args(["--sixel", "--no-compact", "hello"])
+        .args(["--mode", "dense", "hello"])
         .assert()
         .failure()
         .code(2);
 }
 
 #[test]
-fn short_help_lists_the_kitty_option() {
-    let help = stdout(&["-h"]);
-    assert!(help.contains("--kitty"), "{help}");
+fn removed_switches_are_rejected() {
+    for args in [
+        ["--no-compact", "hello"],
+        ["--kitty", "hello"],
+        ["--sixel", "hello"],
+    ] {
+        qrtxt().args(args).assert().failure().code(2);
+    }
 }
 
 #[test]
-fn short_help_lists_the_sixel_option() {
+fn short_help_lists_the_mode_option_and_its_values() {
     let help = stdout(&["-h"]);
-    assert!(help.contains("--sixel"), "{help}");
+    assert!(help.contains("--mode"), "{help}");
+    assert!(help.contains("kitty"), "{help}");
+    assert!(help.contains("sixel"), "{help}");
 }

@@ -14,8 +14,14 @@ terminal text. It is a library (`src/lib.rs`) plus a thin binary (`src/main.rs`)
   pure (they do no IO); `input` only reads the payload source (a file, or the injected
   stdin reader). All argument parsing and all process-level side effects (locking
   stdin/stdout, probing the TTY, writing output) live in `src/cli/`: `mod.rs` holds the
-  `Cli` schema and orchestration, `probe.rs` the Kitty capability probe, `help.rs` the
-  `--help` hint. Put new pure logic in a domain module, not in `cli`.
+  `Cli` schema and orchestration, `probe.rs` the fused Kitty+Sixel capability probe,
+  `help.rs` the `--help` hint. Put new pure logic in a domain module, not in `cli`.
+- Rendering is chosen by a single `--mode` selector (`auto`/`text`/`ansi`/`kitty`/`sixel`).
+  `auto`, the default, is resolved in `cli::run_with` against the terminal's capabilities:
+  it picks a bitmap only when `stdout` is a terminal and a protocol is supported (Kitty
+  before Sixel), so a piped or redirected run always yields text. Both protocols are asked
+  in ONE round trip (`probe.rs`) — they share one `/dev/tty` stream, so never probe them
+  from separate threads.
 - Non-ASCII payloads are prefixed with a UTF-8 ECI, and Kanji-mode segments are force-
   downgraded to bytes (`src/encode.rs`). This stops scanners from decoding UTF-8 CJK as
   Shift-JIS. Do not remove it; it is covered by dedicated tests.
