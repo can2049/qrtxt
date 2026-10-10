@@ -348,7 +348,7 @@ mod tests {
     }
 
     #[test]
-    fn max_size_caps_and_balances_every_chunk() {
+    fn max_bytes_caps_and_balances_every_chunk() {
         let data = vec![b'a'; 250];
         let chunks = split_chunks(&data, Ec::L, Some(100), None);
         let sizes: Vec<usize> = chunks.iter().map(|chunk| chunk.len()).collect();
@@ -363,12 +363,12 @@ mod tests {
     }
 
     #[test]
-    fn max_size_keeps_a_fitting_payload_as_one_code() {
+    fn max_bytes_keeps_a_fitting_payload_as_one_code() {
         assert_eq!(split_chunks(&[b'a'; 50], Ec::L, Some(1000), None).len(), 1);
     }
 
     #[test]
-    fn max_size_splits_a_small_payload() {
+    fn max_bytes_splits_a_small_payload() {
         let payload = b"abcdefghij";
         let chunks = split_chunks(payload, Ec::L, Some(4), None);
         assert_eq!(chunks.len(), 3);
@@ -377,7 +377,7 @@ mod tests {
     }
 
     #[test]
-    fn max_size_above_the_symbol_limit_is_clamped() {
+    fn max_bytes_above_the_symbol_limit_is_clamped() {
         let data = vec![b'a'; 4000];
         let chunks = split_chunks(&data, Ec::L, Some(9000), None);
         assert_eq!(chunks.len(), 2, "clamped cap matches the symbol limit");
@@ -386,13 +386,13 @@ mod tests {
     }
 
     #[test]
-    fn encode_multi_honors_max_size() {
+    fn encode_multi_honors_max_bytes() {
         let codes = encode_multi(&vec![b'a'; 250], Ec::L, Some(100), None).unwrap();
         assert_eq!(codes.len(), 3);
     }
 
     #[test]
-    fn zero_max_size_is_floored_instead_of_panicking() {
+    fn zero_max_bytes_is_floored_instead_of_panicking() {
         // Regression: a zero cap used to reach `div_ceil(0)` and panic. It is
         // floored to one byte, so the payload still splits (one byte, or one
         // whole character, per code) and no character is divided.
@@ -426,7 +426,7 @@ mod tests {
     }
 
     #[test]
-    fn chunk_combines_with_max_size() {
+    fn chunk_combines_with_max_bytes() {
         let data = vec![b'a'; 1000];
         let chunks = split_chunks(&data, Ec::L, Some(300), Some(5));
         let sizes: Vec<usize> = chunks.iter().map(|chunk| chunk.len()).collect();

@@ -117,22 +117,22 @@ fn input_within_one_symbol_has_no_caption() {
 }
 
 #[test]
-fn max_size_splits_into_smaller_codes() {
+fn max_bytes_splits_into_smaller_codes() {
     let payload = "a".repeat(250);
-    let text = stdout(&["-e", "L", "--max-size", "100", &payload]);
+    let text = stdout(&["-e", "L", "--max-bytes", "100", &payload]);
     assert!(text.contains("QR 1/3"), "missing first caption");
     assert!(text.contains("QR 3/3"), "missing last caption");
 }
 
 #[test]
-fn max_size_above_the_payload_keeps_a_single_code() {
-    assert_eq!(stdout(&["--max-size", "1000", "hello"]), stdout(&["hello"]));
+fn max_bytes_above_the_payload_keeps_a_single_code() {
+    assert_eq!(stdout(&["--max-bytes", "1000", "hello"]), stdout(&["hello"]));
 }
 
 #[test]
-fn max_size_zero_exits_two() {
+fn max_bytes_zero_exits_two() {
     qrtxt()
-        .args(["--max-size", "0", "hello"])
+        .args(["--max-bytes", "0", "hello"])
         .assert()
         .failure()
         .code(2);

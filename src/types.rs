@@ -105,7 +105,7 @@ pub struct Config {
     /// Keep one trailing newline instead of stripping it.
     pub preserve_newline: bool,
     /// Cap on the payload bytes per QR code; `None` uses the symbol's own limit.
-    pub max_size: Option<usize>,
+    pub max_bytes: Option<usize>,
     /// Advisory floor on the number of QR codes to split across; `None` means no
     /// floor beyond what the byte cap requires.
     pub min_chunks: Option<usize>,

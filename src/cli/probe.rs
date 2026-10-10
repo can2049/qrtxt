@@ -6,6 +6,7 @@
 //! interpret would only spew garbage.
 
 use std::io::{IsTerminal, Write};
+use std::time::Duration;
 
 use crate::error::AppError;
 
@@ -58,9 +59,7 @@ pub(super) fn probe_kitty_terminal() -> Result<Option<bool>, AppError> {
 
 /// Send the support query and read the reply in raw mode, with a short timeout.
 fn probe_kitty(tty: &mut std::fs::File) -> std::io::Result<bool> {
-    use std::io::Read as _;
     use std::os::fd::AsFd as _;
-    use std::time::{Duration, Instant};
 
     use rustix::termios::{OptionalActions, SpecialCodeIndex, tcgetattr, tcsetattr};
 
@@ -81,7 +80,20 @@ fn probe_kitty(tty: &mut std::fs::File) -> std::io::Result<bool> {
     tty.write_all(&crate::kitty::query(KITTY_PROBE_ID))?;
     tty.flush()?;
 
-    let deadline = Instant::now() + Duration::from_millis(300);
+    let response = read_reply_until_st(tty, Duration::from_millis(300))?;
+    Ok(crate::kitty::response_ok(&response))
+}
+
+/// Read from `tty` until the sequence terminator `ESC \` arrives or `timeout`
+/// elapses, whichever comes first, and return the bytes read.
+///
+/// The caller must first put `tty` in raw mode with a read timeout (`VMIN` /
+/// `VTIME`), so each read returns promptly instead of blocking for input.
+fn read_reply_until_st(tty: &mut std::fs::File, timeout: Duration) -> std::io::Result<Vec<u8>> {
+    use std::io::Read as _;
+    use std::time::Instant;
+
+    let deadline = Instant::now() + timeout;
     let mut response = Vec::new();
     let mut byte = [0u8; 1];
     while Instant::now() < deadline {
@@ -97,7 +109,7 @@ fn probe_kitty(tty: &mut std::fs::File) -> std::io::Result<bool> {
             Err(error) => return Err(error),
         }
     }
-    Ok(crate::kitty::response_ok(&response))
+    Ok(response)
 }
 
 /// Restores the terminal's saved attributes when dropped, even on early return.

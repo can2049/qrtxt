@@ -41,7 +41,7 @@ $ qrtxt "hi"
   of printing garbage.
 - **Dark and light terminals** — `--invert` handles light backgrounds.
 - **Long payloads** — input too long for one symbol is split automatically across
-  balanced codes; `--max-size` caps the bytes per code, `--chunk` sets a floor on
+  balanced codes; `--max-bytes` caps the bytes per code, `--chunk` sets a floor on
   the number of codes.
 - **Safe by default** — no `unsafe` code, and errors never echo the payload.
 - **A single static binary** — no runtime dependencies.
@@ -76,7 +76,7 @@ Arguments:
 Options:
   -g, --glyphs <SET>              Glyph set used to pack modules into character cells: half (h; 1x2 modules per cell, most robust), quadrant (q; 2x2), or braille (b; 2x4, densest) [default: half]
   -e, --error-correction <LEVEL>  Error-correction level: L (about 7% recoverable), M (15%), Q (25%), or H (30%) [default: L]
-  -m, --max-size <BYTES>          Cap the payload of each QR code at BYTES bytes; implies splitting (default: the symbol's own limit)
+  -m, --max-bytes <BYTES>          Cap the payload of each QR code at BYTES bytes; implies splitting (default: the symbol's own limit)
   -c, --chunk <COUNT>             Split the payload across at least COUNT QR codes; advisory (default: no minimum)
   -a, --no-compact                Render with ANSI escape codes instead of Unicode block characters
   -k, --kitty                     Draw a smaller QR as a bitmap through the Kitty graphics protocol
@@ -121,7 +121,7 @@ qrtxt --kitty "https://example.com"
 qrtxt --invert "hello"
 
 # split automatically, capping each code at 500 bytes
-qrtxt --max-size 500 --file big.txt
+qrtxt --max-bytes 500 --file big.txt
 
 # split into at least 4 balanced codes
 qrtxt --chunk 4 "a-short-but-verifiable-payload"
@@ -171,7 +171,7 @@ data, and cuts fall on character boundaries, so multi-byte characters are never
 broken between codes. A payload that fits one symbol is printed as a single,
 uncaptioned code.
 
-Pass `--max-size BYTES` to cap the payload in each code (for smaller, easier-to-scan
+Pass `--max-bytes BYTES` to cap the payload in each code (for smaller, easier-to-scan
 symbols). It implies splitting: even a payload that would fit one symbol is split
 so every code stays within the cap. A cap larger than a symbol can hold is clamped
 down to the symbol's own limit.
@@ -180,7 +180,7 @@ Pass `--chunk COUNT` to spread the payload across **at least** COUNT codes (for
 example, to keep every code small or to lay them out on a page). It is advisory:
 the payload is split into `COUNT` balanced codes when the content allows, else into
 as many as possible (one code per character is the ceiling). `--chunk` and
-`--max-size` can be combined; whichever forces more codes wins.
+`--max-bytes` can be combined; whichever forces more codes wins.
 
 ## Exit codes
 

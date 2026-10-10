@@ -239,9 +239,9 @@ fn split_payload_round_trips_in_order() {
 }
 
 #[test]
-fn max_size_split_round_trips_in_order() {
+fn max_bytes_split_round_trips_in_order() {
     let payload = "a".repeat(3000);
-    let text = render(&["-e", "L", "--max-size", "500", &payload]);
+    let text = render(&["-e", "L", "--max-bytes", "500", &payload]);
     let blocks = multi_blocks(&text);
     assert_eq!(blocks.len(), 6, "3000 bytes at 500 bytes per code");
     assert_eq!(decode_blocks(&text), payload);
@@ -394,12 +394,12 @@ fn cjk_round_trips_when_inverted() {
 
 #[test]
 fn cjk_split_round_trips_in_order_without_symbol_loss() {
-    // A CJK payload large enough to split by both --chunk and --max-size. Every
+    // A CJK payload large enough to split by both --chunk and --max-bytes. Every
     // code must decode losslessly and, in order, reproduce the whole payload.
     let payload = "中文测试 한국어 日本語".repeat(250);
     for extra in [
         ["-e", "L", "--chunk", "7"],
-        ["-e", "L", "--max-size", "400"],
+        ["-e", "L", "--max-bytes", "400"],
     ] {
         let mut args = extra.to_vec();
         args.push("--");

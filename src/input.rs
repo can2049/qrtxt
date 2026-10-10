@@ -81,7 +81,7 @@ mod tests {
             glyphs: GlyphSet::Half,
             mode: RenderMode::Compact,
             preserve_newline,
-            max_size: None,
+            max_bytes: None,
             min_chunks: None,
         }
     }

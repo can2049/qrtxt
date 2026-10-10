@@ -28,7 +28,7 @@ Reads a payload from a literal argument, a file, or standard input and prints it
 more QR codes drawn with Unicode block characters, so no graphics environment is needed — \
 just a UTF-8 terminal.\n\n\
 A payload too large for a single symbol is split automatically across several balanced codes, \
-printed in order under a `QR i/N` caption. Use --max-size to cap the bytes per code, or \
+printed in order under a `QR i/N` caption. Use --max-bytes to cap the bytes per code, or \
 --chunk to require a minimum number of codes.",
     after_help = "Source: https://github.com/can2049/qrtxt"
 )]
@@ -76,18 +76,18 @@ pub struct Cli {
     /// at least 1.
     #[arg(
         short = 'm',
-        long = "max-size",
+        long = "max-bytes",
         value_name = "BYTES",
         value_parser = clap::value_parser!(u32).range(1..)
     )]
-    pub max_size: Option<u32>,
+    pub max_bytes: Option<u32>,
 
     /// Split the payload across at least COUNT QR codes; advisory (default: no
     /// minimum).
     ///
     /// The payload is divided into COUNT balanced codes when the content allows,
     /// otherwise into as many codes as possible (at most one per character). Can be
-    /// combined with --max-size; whichever forces more codes wins. The value must
+    /// combined with --max-bytes; whichever forces more codes wins. The value must
     /// be at least 1.
     #[arg(
         short = 'c',
@@ -175,7 +175,7 @@ impl Cli {
                 RenderMode::Compact
             },
             preserve_newline: self.preserve_newline,
-            max_size: self.max_size.map(|bytes| bytes as usize),
+            max_bytes: self.max_bytes.map(|bytes| bytes as usize),
             min_chunks: self.chunk.map(|count| count as usize),
         }
     }
@@ -201,7 +201,7 @@ pub fn run(
     stdin_is_tty: bool,
 ) -> Result<(), AppError> {
     let payload = crate::input::resolve(cfg, stdin, stdin_is_tty)?;
-    let codes = crate::encode::encode_multi(&payload, cfg.ec, cfg.max_size, cfg.min_chunks)?;
+    let codes = crate::encode::encode_multi(&payload, cfg.ec, cfg.max_bytes, cfg.min_chunks)?;
 
     let mut writer = std::io::BufWriter::new(stdout);
     if let Err(error) = render_all(cfg, &codes, &mut writer) {
@@ -236,7 +236,10 @@ fn render_all(cfg: &Config, codes: &[QrCode], out: &mut dyn std::io::Write) -> s
                 crate::render::render(&frame, cfg.glyphs, out)?;
             }
             RenderMode::Ansi => {
-                let frame = crate::render::build_ink(qr, cfg.border, cfg.invert, cfg.glyphs);
+                // ANSI draws one module per two spaces and ignores the glyph set,
+                // so pin the frame's tile to the smallest one: the output is then
+                // independent of `--glyphs` instead of shifting with it.
+                let frame = crate::render::build_ink(qr, cfg.border, cfg.invert, GlyphSet::Half);
                 crate::render::render_ansi(&frame, out)?;
             }
         }
@@ -306,7 +309,7 @@ mod tests {
         assert!(cfg.invert);
         assert_eq!(cfg.glyphs, GlyphSet::Braille);
         assert_eq!(cfg.border, 4);
-        assert_eq!(cfg.max_size, None);
+        assert_eq!(cfg.max_bytes, None);
         assert_eq!(cfg.ec, Ec::L);
     }
 
@@ -322,26 +325,26 @@ mod tests {
         assert_eq!(cfg.glyphs, GlyphSet::Half);
         assert_eq!(cfg.ec, Ec::H);
         assert_eq!(cfg.border, 2);
-        assert_eq!(cfg.max_size, Some(9));
+        assert_eq!(cfg.max_bytes, Some(9));
     }
 
     #[test]
-    fn max_size_defaults_to_none() {
-        assert_eq!(parse(&["x"]).to_config().max_size, None);
+    fn max_bytes_defaults_to_none() {
+        assert_eq!(parse(&["x"]).to_config().max_bytes, None);
     }
 
     #[test]
-    fn max_size_parses_long_and_short() {
+    fn max_bytes_parses_long_and_short() {
         assert_eq!(
-            parse(&["--max-size", "100", "x"]).to_config().max_size,
+            parse(&["--max-bytes", "100", "x"]).to_config().max_bytes,
             Some(100)
         );
-        assert_eq!(parse(&["-m", "100", "x"]).to_config().max_size, Some(100));
+        assert_eq!(parse(&["-m", "100", "x"]).to_config().max_bytes, Some(100));
     }
 
     #[test]
-    fn max_size_zero_is_rejected() {
-        assert!(Cli::try_parse_from(["qrtxt", "--max-size", "0", "x"]).is_err());
+    fn max_bytes_zero_is_rejected() {
+        assert!(Cli::try_parse_from(["qrtxt", "--max-bytes", "0", "x"]).is_err());
     }
 
     #[test]
@@ -367,7 +370,7 @@ mod tests {
     fn render_all_captions_multiple_codes() {
         let cfg = parse(&["-e", "L", "x"]).to_config();
         let codes =
-            crate::encode::encode_multi(&vec![b'x'; 4000], cfg.ec, cfg.max_size, cfg.min_chunks)
+            crate::encode::encode_multi(&vec![b'x'; 4000], cfg.ec, cfg.max_bytes, cfg.min_chunks)
                 .unwrap();
         assert!(codes.len() > 1);
         let mut out = Vec::new();
@@ -381,12 +384,30 @@ mod tests {
     fn render_all_leaves_a_single_code_uncaptioned() {
         let cfg = parse(&["x"]).to_config();
         let codes =
-            crate::encode::encode_multi(b"hello", cfg.ec, cfg.max_size, cfg.min_chunks).unwrap();
+            crate::encode::encode_multi(b"hello", cfg.ec, cfg.max_bytes, cfg.min_chunks).unwrap();
         assert_eq!(codes.len(), 1);
         let mut out = Vec::new();
         render_all(&cfg, &codes, &mut out).unwrap();
         let text = String::from_utf8(out).unwrap();
         assert!(!text.contains("QR "), "{text}");
+    }
+
+    #[test]
+    fn ansi_output_is_independent_of_the_glyph_set() {
+        // Regression: ANSI ignores the glyph set, but the frame was still padded
+        // to the chosen glyph's tile, so `-a -g braille` gained blank rows over
+        // `-a`. The frame now uses the smallest tile in ANSI mode, so they match.
+        let ansi = parse(&["-a", "hi"]).to_config();
+        let braille = parse(&["-a", "-g", "braille", "hi"]).to_config();
+        assert_eq!(braille.mode, RenderMode::Ansi);
+        let codes =
+            crate::encode::encode_multi(b"hi", ansi.ec, ansi.max_bytes, ansi.min_chunks).unwrap();
+        let draw = |cfg: &Config| {
+            let mut out = Vec::new();
+            render_all(cfg, &codes, &mut out).unwrap();
+            out
+        };
+        assert_eq!(draw(&ansi), draw(&braille));
     }
 
     #[test]
@@ -397,7 +418,7 @@ mod tests {
         // distinct id, in order.
         let cfg = parse(&["-k", "-e", "L", "x"]).to_config();
         let codes =
-            crate::encode::encode_multi(&vec![b'x'; 6000], cfg.ec, cfg.max_size, cfg.min_chunks)
+            crate::encode::encode_multi(&vec![b'x'; 6000], cfg.ec, cfg.max_bytes, cfg.min_chunks)
                 .unwrap();
         assert!(codes.len() >= 3, "payload should split into several codes");
 
@@ -444,7 +465,7 @@ mod tests {
             "Q",
             "--border",
             "1",
-            "--max-size",
+            "--max-bytes",
             "7",
             "--chunk",
             "4",
@@ -457,7 +478,7 @@ mod tests {
         assert_eq!(cfg.glyphs, GlyphSet::Quadrant);
         assert_eq!(cfg.ec, Ec::Q);
         assert_eq!(cfg.border, 1);
-        assert_eq!(cfg.max_size, Some(7));
+        assert_eq!(cfg.max_bytes, Some(7));
         assert_eq!(cfg.min_chunks, Some(4));
     }
 
