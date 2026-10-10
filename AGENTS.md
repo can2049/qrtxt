@@ -10,9 +10,12 @@ terminal text. It is a library (`src/lib.rs`) plus a thin binary (`src/main.rs`)
 ## Architecture invariants (do not break)
 
 - Dependencies point one way: `cli` -> {`input`, `encode`, `render`} -> `types` / `error`.
-- The domain modules `input`, `encode`, and `render` are pure and must NEVER depend on
-  `clap` or do IO. All argument parsing lives in `src/cli.rs`; all side effects live in
-  `cli::run_with` / `cli::run`. Put new pure logic in a domain module, not in `cli`.
+- The domain modules must NEVER depend on `clap`. `encode`, `render`, and `kitty` are
+  pure (they do no IO); `input` only reads the payload source (a file, or the injected
+  stdin reader). All argument parsing and all process-level side effects (locking
+  stdin/stdout, probing the TTY, writing output) live in `src/cli/`: `mod.rs` holds the
+  `Cli` schema and orchestration, `probe.rs` the Kitty capability probe, `help.rs` the
+  `--help` hint. Put new pure logic in a domain module, not in `cli`.
 - Non-ASCII payloads are prefixed with a UTF-8 ECI, and Kanji-mode segments are force-
   downgraded to bytes (`src/encode.rs`). This stops scanners from decoding UTF-8 CJK as
   Shift-JIS. Do not remove it; it is covered by dedicated tests.

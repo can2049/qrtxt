@@ -1,7 +1,7 @@
 # Kitty 图形协议渲染 · 实现说明
 
 > `qrtxt -k` 用 Kitty 图形协议把二维码画成**像素级黑白位图**，而非 Unicode 字形。
-> 状态：已实现，测试全绿（117 项），**尚未提交**。
+> 状态：已实现并合并（PR #1），测试全绿（117 项）。
 
 **背景**：braille 下暗模块只是一个凸点，三个定位框（finder pattern）被渲染成细点线、
 不够醒目。改用位图即可不受字体渲染质量的限制。
@@ -42,7 +42,7 @@ input -> encode -> render::render_kitty -> kitty::transmit_rgb -> stdout
 
 ### 模块分工
 
-- **`src/kitty.rs`（新增，纯逻辑）**：协议封帧本身。
+- **`src/kitty.rs`（纯逻辑）**：协议封帧本身。
   - `encode_base64`：手写 base64（不引额外依赖）。
   - `transmit_rgb`：按 3072 字节分块，首块带全部控制键，末块 `m=0`。
   - `query`：探测序列；`response_ok`：判定响应是否含 `;OK`。
@@ -50,7 +50,8 @@ input -> encode -> render::render_kitty -> kitty::transmit_rgb -> stdout
   `side = qr.width() + 2*border`，`module_px = (300/side).clamp(2,8)`；
   暗模块→黑、亮模块→白（`--invert` 交换），静默区为亮色。
 - **`src/types.rs`**：新增 `RenderMode::Kitty`。
-- **`src/cli.rs`**：`-k/--kitty` 开关（与 `--no-compact` 互斥）、逐码 id 分配、支持探测、帮助提示。
+- **`src/cli/`**：`mod.rs` 放 `-k/--kitty` 开关（与 `--no-compact` 互斥）与逐码 id 分配；
+  `probe.rs` 放 `a=q` 支持探测；`help.rs` 放帮助提示。
 
 ### 支持探测（`a=q` 握手）
 
@@ -84,8 +85,10 @@ input -> encode -> render::render_kitty -> kitty::transmit_rgb -> stdout
 - 可扫性：`kitty_bitmap_round_trips` / `kitty_multi_code_round_trips` 把 APC 解析回模块网格
   再交 `rqrr` 解码，覆盖普通 / URL / 中文 / 反相及多码顺序重组。
 - id 唯一：`render_all_kitty_renders_every_code_with_its_own_image_id`（改回共用 id 立刻失败）。
-- 帮助提示：`kitty_hint_is_appended_to_both_help_forms`；另用 pty 模拟终端（回复 `;OK` →
-  支持；超时 → 不支持；管道里的 `-h` 不带提示）。
+- 帮助提示：`kitty_hint_is_appended_to_both_help_forms` 与
+  `support_hint_reflects_the_probe_result`（纯映射，不依赖真实终端）。
+- 探测路径：`tests/cli.rs::kitty_requires_a_terminal` 覆盖“stdout 非终端 → 退出码 2”；
+  真实终端的 `;OK` / 超时分支**无自动化测试**（需 pty），仅在实机手测（见第四节）。
 - 错误路径已实测：`stdout` 非终端、`--kitty --no-compact` 冲突，均退出码 2。
 
 ---
@@ -95,7 +98,6 @@ input -> encode -> render::render_kitty -> kitty::transmit_rgb -> stdout
 - **实机确认（阻塞项）**：在 kitty / Ghostty / WezTerm 下核对显示效果与 `a=T` 之后的
   光标 / 换行排版（本开发环境为 VS Code 终端，**无法目视验证**；可扫性已由测试保证）。
 - 可选增强：每模块像素倍率可配置、显示后清理图像、Sixel 回退。
-- 当前改动尚未提交。
 
 参考：Kitty 图形协议规范 https://sw.kovidgoyal.net/kitty/graphics-protocol/ ；
 `rustix` termios https://docs.rs/rustix/latest/rustix/termios/ 。

@@ -12,8 +12,10 @@
 //! `cli` -> {`input`, `encode`, `render`} -> `types` / `error`, with the
 //! low-level `kitty` protocol helpers shared by `cli` (the terminal probe) and
 //! `render` (bitmap transmission).
-//! The domain modules are pure and never depend on `clap`; all side effects are
-//! confined to [`cli::run`] / [`cli::run_with`].
+//! The domain modules never depend on `clap`: `encode` / `render` / `kitty` are
+//! pure, and `input` only reads the payload source. All argument parsing and all
+//! process-level side effects (stdin/stdout locking, the TTY probe, writing
+//! output) live in [`cli::run`] / [`cli::run_with`].
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

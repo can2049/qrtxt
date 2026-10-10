@@ -1,12 +1,21 @@
 //! Command-line interface: argument parsing (`Cli`) and orchestration (`run`).
+//!
+//! All argument parsing lives here; the Kitty capability probe lives in
+//! [`probe`] and the `--help` hint plumbing in [`help`]. Their public items are
+//! re-exported below so callers keep using the `cli::` path.
 
 use std::io::{IsTerminal, Write};
 
-use clap::{CommandFactory, Parser};
+use clap::Parser;
 use qrcode::QrCode;
 
 use crate::error::AppError;
 use crate::types::{Config, Ec, GlyphSet, InputSpec, RenderMode};
+
+mod help;
+mod probe;
+
+pub use help::{command_with_kitty_hint, kitty_support_hint};
 
 /// Turn text into a terminal QR code.
 #[derive(Debug, Parser)]
@@ -78,8 +87,8 @@ pub struct Cli {
     ///
     /// The payload is divided into COUNT balanced codes when the content allows,
     /// otherwise into as many codes as possible (at most one per character). Can be
-    /// combined with --max-size; whichever forces more codes wins. The value must be
-    /// at least 1.
+    /// combined with --max-size; whichever forces more codes wins. The value must
+    /// be at least 1.
     #[arg(
         short = 'c',
         long = "chunk",
@@ -176,7 +185,7 @@ impl Cli {
 pub fn run_with(cli: &Cli) -> Result<(), AppError> {
     let cfg = cli.to_config();
     if cfg.mode == RenderMode::Kitty {
-        ensure_kitty_supported()?;
+        probe::ensure_kitty_supported()?;
     }
     let mut stdin = std::io::stdin().lock();
     let mut stdout = std::io::stdout().lock();
@@ -236,164 +245,6 @@ fn render_all(cfg: &Config, codes: &[QrCode], out: &mut dyn std::io::Write) -> s
         }
     }
     Ok(())
-}
-
-/// Image id used for the capability probe, kept well clear of the display range.
-const KITTY_PROBE_ID: u32 = 1_000_000;
-
-/// Ensure the current terminal implements the Kitty graphics protocol (FR-3.12).
-///
-/// The probe runs an `a=q` handshake over the controlling terminal, so the reply
-/// is read without disturbing the payload stream (which may arrive on stdin). A
-/// terminal that cannot draw the bitmap is a hard error: printing escape bytes it
-/// cannot interpret would only spew garbage.
-fn ensure_kitty_supported() -> Result<(), AppError> {
-    match probe_kitty_terminal()? {
-        Some(true) => Ok(()),
-        Some(false) => Err(AppError::Usage(
-            "kitty: this terminal does not support the Kitty graphics protocol \
-             (try kitty, Ghostty, or WezTerm)"
-                .to_string(),
-        )),
-        None => Err(AppError::Usage(
-            "kitty: standard output is not a terminal".to_string(),
-        )),
-    }
-}
-
-/// Probe the controlling terminal for Kitty graphics support (FR-3.12).
-///
-/// Returns `Ok(None)` when there is no terminal to ask (standard output is not a
-/// terminal); otherwise `Ok(Some(true/false))` from the `a=q` handshake.
-fn probe_kitty_terminal() -> Result<Option<bool>, AppError> {
-    if !std::io::stdout().is_terminal() {
-        return Ok(None);
-    }
-    let mut tty = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open("/dev/tty")
-        .map_err(|source| AppError::Io {
-            context: "kitty: cannot open the controlling terminal",
-            source,
-        })?;
-    probe_kitty(&mut tty)
-        .map(Some)
-        .map_err(|source| AppError::Io {
-            context: "kitty: cannot query the terminal",
-            source,
-        })
-}
-
-/// A one-line hint about the current terminal's Kitty support, for `--help`
-/// (FR-3.12).
-///
-/// Runs the same `a=q` handshake as [`run_with`], but never fails: it returns
-/// `None` when there is no terminal to probe or the probe errors, so the help
-/// text stays truthful rather than guessing.
-#[must_use]
-pub fn kitty_support_hint() -> Option<String> {
-    hint_for(probe_kitty_terminal().ok().flatten())
-}
-
-/// Map a probe result to the help hint; `None` means there was nothing to probe.
-fn hint_for(support: Option<bool>) -> Option<String> {
-    match support {
-        Some(true) => Some("This terminal supports it.".to_string()),
-        Some(false) => Some("This terminal does not support it.".to_string()),
-        None => None,
-    }
-}
-
-/// The clap command with a live Kitty support `hint` appended to the `--kitty`
-/// option's help.
-///
-/// Used only when help is being shown, so the probe cost is paid once. The short
-/// and long help both gain the hint.
-#[must_use]
-pub fn command_with_kitty_hint(hint: &str) -> clap::Command {
-    Cli::command().mut_arg("kitty", |arg| {
-        let short = arg.get_help().map(ToString::to_string).unwrap_or_default();
-        let long = arg
-            .get_long_help()
-            .map(ToString::to_string)
-            .unwrap_or_else(|| short.clone());
-        // clap strips the trailing stop from the short help, so restore it before
-        // appending, otherwise the two sentences run together.
-        arg.help(format!("{} {hint}", end_with_period(short.trim_end())))
-            .long_help(format!("{}\n\n{hint}", long.trim_end()))
-    })
-}
-
-/// `text` with a trailing full stop, adding one only when it is missing.
-fn end_with_period(text: &str) -> String {
-    if text.ends_with('.') {
-        text.to_string()
-    } else {
-        format!("{text}.")
-    }
-}
-
-/// Send the support query and read the reply in raw mode, with a short timeout.
-fn probe_kitty(tty: &mut std::fs::File) -> std::io::Result<bool> {
-    use std::io::Read as _;
-    use std::os::fd::AsFd as _;
-    use std::time::{Duration, Instant};
-
-    use rustix::termios::{OptionalActions, SpecialCodeIndex, tcgetattr, tcsetattr};
-
-    let original = tcgetattr(tty.as_fd())?;
-    // A duplicate handle restores the attributes on the way out without holding a
-    // borrow of `tty`, which stays free for reading and writing.
-    let _guard = TermiosGuard {
-        tty: tty.try_clone()?,
-        original: original.clone(),
-    };
-
-    let mut raw = original;
-    raw.make_raw();
-    raw.special_codes[SpecialCodeIndex::VMIN] = 0;
-    raw.special_codes[SpecialCodeIndex::VTIME] = 1; // 0.1s between reads
-    tcsetattr(tty.as_fd(), OptionalActions::Now, &raw)?;
-
-    tty.write_all(&crate::kitty::query(KITTY_PROBE_ID))?;
-    tty.flush()?;
-
-    let deadline = Instant::now() + Duration::from_millis(300);
-    let mut response = Vec::new();
-    let mut byte = [0u8; 1];
-    while Instant::now() < deadline {
-        match tty.read(&mut byte) {
-            Ok(0) => {} // the read timed out with no data
-            Ok(_) => {
-                response.push(byte[0]);
-                if response.ends_with(b"\x1b\\") {
-                    break;
-                }
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(error) => return Err(error),
-        }
-    }
-    Ok(crate::kitty::response_ok(&response))
-}
-
-/// Restores the terminal's saved attributes when dropped, even on early return.
-struct TermiosGuard {
-    tty: std::fs::File,
-    original: rustix::termios::Termios,
-}
-
-impl Drop for TermiosGuard {
-    fn drop(&mut self) {
-        use std::os::fd::AsFd as _;
-
-        let _ = rustix::termios::tcsetattr(
-            self.tty.as_fd(),
-            rustix::termios::OptionalActions::Now,
-            &self.original,
-        );
-    }
 }
 
 fn map_write_error(error: std::io::Error) -> Result<(), AppError> {
@@ -638,29 +489,5 @@ mod tests {
     #[test]
     fn kitty_conflicts_with_no_compact() {
         assert!(Cli::try_parse_from(["qrtxt", "--kitty", "--no-compact", "x"]).is_err());
-    }
-
-    #[test]
-    fn support_hint_reflects_the_probe_result() {
-        // Tested through the pure mapping: the live probe depends on the ambient
-        // terminal, which would make this test fail under an interactive one.
-        assert_eq!(hint_for(None), None);
-        assert!(hint_for(Some(true)).unwrap().contains("supports it"));
-        assert!(hint_for(Some(false)).unwrap().contains("does not support"));
-    }
-
-    #[test]
-    fn kitty_hint_is_appended_to_both_help_forms() {
-        let hint = "This terminal supports the Kitty graphics protocol.";
-        let mut command = command_with_kitty_hint(hint);
-
-        let short = command.render_help().to_string();
-        assert!(short.contains("--kitty"), "{short}");
-        // The stripped stop is restored so the hint starts a new sentence.
-        assert!(short.contains(". This terminal supports"), "{short}");
-
-        let long = command.render_long_help().to_string();
-        assert!(long.contains("--kitty"), "{long}");
-        assert!(long.contains(hint), "{long}");
     }
 }
