@@ -218,10 +218,42 @@ pub fn render_ansi(frame: &Frame, out: &mut dyn Write) -> io::Result<()> {
 }
 
 /// Target rendered size, in pixels; the per-module scale is derived from it.
-const KITTY_TARGET_PX: usize = 300;
+const TARGET_PX: usize = 300;
 /// Bounds on the pixels-per-module scale.
-const KITTY_MIN_MODULE_PX: usize = 2;
-const KITTY_MAX_MODULE_PX: usize = 8;
+const MIN_MODULE_PX: usize = 2;
+const MAX_MODULE_PX: usize = 8;
+
+/// A QR scaled to a square pixel bitmap: `image_px` pixels per side, `true` marks
+/// a dark pixel.
+struct Bitmap {
+    image_px: usize,
+    dark: Vec<bool>,
+}
+
+/// Scale `qr`, plus its quiet zone, to a square pixel bitmap — one crisp block of
+/// pixels per module.
+fn module_bitmap(qr: &QrCode, border: u32) -> Bitmap {
+    let src = qr.width();
+    let colors = qr.to_colors();
+    let b = border as usize;
+    let side = src + 2 * b;
+    let module_px = (TARGET_PX / side).clamp(MIN_MODULE_PX, MAX_MODULE_PX);
+    let image_px = side * module_px;
+
+    let mut dark = vec![false; image_px * image_px];
+    for y in 0..image_px {
+        let module_y = y / module_px;
+        for x in 0..image_px {
+            let module_x = x / module_px;
+            dark[y * image_px + x] = module_x >= b
+                && module_x < b + src
+                && module_y >= b
+                && module_y < b + src
+                && matches!(colors[(module_y - b) * src + (module_x - b)], Color::Dark);
+        }
+    }
+    Bitmap { image_px, dark }
+}
 
 /// Render `qr` as a black-and-white bitmap through the Kitty graphics protocol
 /// (FR-3.12).
@@ -240,12 +272,7 @@ pub fn render_kitty(
     id: u32,
     out: &mut dyn Write,
 ) -> io::Result<()> {
-    let src = qr.width();
-    let colors = qr.to_colors();
-    let b = border as usize;
-    let side = src + 2 * b;
-    let module_px = (KITTY_TARGET_PX / side).clamp(KITTY_MIN_MODULE_PX, KITTY_MAX_MODULE_PX);
-    let image_px = side * module_px;
+    let bitmap = module_bitmap(qr, border);
 
     // Default: dark modules are black on a white field (FR-3.8); `invert` swaps
     // the two colours (FR-3.9).
@@ -255,23 +282,26 @@ pub fn render_kitty(
         ([0, 0, 0], [255, 255, 255])
     };
 
-    let mut rgb = vec![0u8; image_px * image_px * 3];
-    for y in 0..image_px {
-        let module_y = y / module_px;
-        for x in 0..image_px {
-            let module_x = x / module_px;
-            let is_dark = module_x >= b
-                && module_x < b + src
-                && module_y >= b
-                && module_y < b + src
-                && matches!(colors[(module_y - b) * src + (module_x - b)], Color::Dark);
-            let colour = if is_dark { dark } else { light };
-            let offset = (y * image_px + x) * 3;
-            rgb[offset..offset + 3].copy_from_slice(&colour);
-        }
+    let mut rgb = Vec::with_capacity(bitmap.dark.len() * 3);
+    for is_dark in &bitmap.dark {
+        let colour = if *is_dark { dark } else { light };
+        rgb.extend_from_slice(&colour);
     }
 
-    crate::kitty::transmit_rgb(&rgb, image_px, image_px, id, out)?;
+    crate::kitty::transmit_rgb(&rgb, bitmap.image_px, bitmap.image_px, id, out)?;
+    out.write_all(b"\n")
+}
+
+/// Render `qr` as a black-and-white bitmap through the Sixel graphics protocol
+/// (FR-3.13).
+///
+/// Works like [`render_kitty`] — each module is a crisp block of pixels on a light
+/// quiet zone — but emits a Sixel sequence instead of a Kitty one, and needs no
+/// image id: Sixel draws at the cursor the moment the sequence is written.
+/// `invert` swaps the two colours (FR-3.9).
+pub fn render_sixel(qr: &QrCode, border: u32, invert: bool, out: &mut dyn Write) -> io::Result<()> {
+    let bitmap = module_bitmap(qr, border);
+    crate::sixel::encode(&bitmap.dark, bitmap.image_px, bitmap.image_px, invert, out)?;
     out.write_all(b"\n")
 }
 
@@ -296,7 +326,7 @@ mod tests {
     fn kitty_bitmap_is_square_with_light_quiet_zone() {
         let qr = QrCode::new(b"hello").unwrap();
         let side = qr.width() + 2 * 4;
-        let module_px = (KITTY_TARGET_PX / side).clamp(KITTY_MIN_MODULE_PX, KITTY_MAX_MODULE_PX);
+        let module_px = (TARGET_PX / side).clamp(MIN_MODULE_PX, MAX_MODULE_PX);
         let image_px = side * module_px;
 
         let mut out = Vec::new();
@@ -327,6 +357,35 @@ mod tests {
             first_payload(&text).starts_with("AAAA"),
             "quiet zone is not black"
         );
+    }
+
+    #[test]
+    fn sixel_bitmap_declares_a_square_raster_and_light_quiet_zone() {
+        let qr = QrCode::new(b"hello").unwrap();
+        let side = qr.width() + 2 * 4;
+        let module_px = (TARGET_PX / side).clamp(MIN_MODULE_PX, MAX_MODULE_PX);
+        let image_px = side * module_px;
+
+        let mut out = Vec::new();
+        render_sixel(&qr, 4, false, &mut out).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.starts_with("\x1bPq"), "missing DCS introducer");
+        assert!(text.ends_with("\x1b\\\n"), "missing string terminator");
+        assert!(
+            text.contains(&format!("\"1;1;{image_px};{image_px}")),
+            "missing or incorrect raster attributes"
+        );
+        // Register 0 (quiet zone) is white, register 1 black.
+        assert!(text.contains("#0;2;100;100;100#1;2;0;0;0"), "{text:?}");
+    }
+
+    #[test]
+    fn sixel_invert_swaps_the_quiet_zone_colour() {
+        let qr = QrCode::new(b"hello").unwrap();
+        let mut out = Vec::new();
+        render_sixel(&qr, 4, true, &mut out).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("#0;2;0;0;0#1;2;100;100;100"), "{text:?}");
     }
 
     #[test]

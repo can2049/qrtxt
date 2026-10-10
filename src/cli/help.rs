@@ -1,13 +1,12 @@
-//! `--help` enhancement: append a live Kitty-support hint to the `--kitty`
-//! option (FR-3.12).
+//! `--help` enhancement: append a live support hint to the `--kitty` and
+//! `--sixel` options (FR-3.12, FR-3.13).
 //!
 //! The probe runs once, only when help is being shown, so a normal invocation
 //! pays nothing. A piped `--help` yields no hint (there is no terminal).
 
-use clap::CommandFactory;
+use clap::Command;
 
-use super::Cli;
-use super::probe::probe_kitty_terminal;
+use super::probe::{probe_kitty_terminal, probe_sixel_terminal};
 
 /// A one-line hint about the current terminal's Kitty support, for `--help`
 /// (FR-3.12).
@@ -20,6 +19,16 @@ pub fn kitty_support_hint() -> Option<String> {
     hint_for(probe_kitty_terminal().ok().flatten())
 }
 
+/// A one-line hint about the current terminal's Sixel support, for `--help`
+/// (FR-3.13).
+///
+/// Runs the same DA1 probe as [`crate::cli::run_with`], but never fails: it
+/// returns `None` when there is no terminal to probe or the probe errors.
+#[must_use]
+pub fn sixel_support_hint() -> Option<String> {
+    hint_for(probe_sixel_terminal().ok().flatten())
+}
+
 /// Map a probe result to the help hint; `None` means there was nothing to probe.
 fn hint_for(support: Option<bool>) -> Option<String> {
     match support {
@@ -29,14 +38,26 @@ fn hint_for(support: Option<bool>) -> Option<String> {
     }
 }
 
-/// The clap command with a live Kitty support `hint` appended to the `--kitty`
-/// option's help.
+/// `command` with a live Kitty support `hint` appended to the `--kitty` option's
+/// help (FR-3.12).
+#[must_use]
+pub fn add_kitty_hint(command: Command, hint: &str) -> Command {
+    with_hint(command, "kitty", hint)
+}
+
+/// `command` with a live Sixel support `hint` appended to the `--sixel` option's
+/// help (FR-3.13).
+#[must_use]
+pub fn add_sixel_hint(command: Command, hint: &str) -> Command {
+    with_hint(command, "sixel", hint)
+}
+
+/// Append `hint` to the short and long help of the `option` named `name`.
 ///
 /// Used only when help is being shown, so the probe cost is paid once. The short
 /// and long help both gain the hint.
-#[must_use]
-pub fn command_with_kitty_hint(hint: &str) -> clap::Command {
-    Cli::command().mut_arg("kitty", |arg| {
+fn with_hint(command: Command, name: &str, hint: &str) -> Command {
+    command.mut_arg(name, |arg| {
         let short = arg.get_help().map(ToString::to_string).unwrap_or_default();
         let long = arg
             .get_long_help()
@@ -61,6 +82,8 @@ fn end_with_period(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::Cli;
+    use clap::CommandFactory;
 
     #[test]
     fn support_hint_reflects_the_probe_result() {
@@ -74,7 +97,7 @@ mod tests {
     #[test]
     fn kitty_hint_is_appended_to_both_help_forms() {
         let hint = "This terminal supports the Kitty graphics protocol.";
-        let mut command = command_with_kitty_hint(hint);
+        let mut command = add_kitty_hint(Cli::command(), hint);
 
         let short = command.render_help().to_string();
         assert!(short.contains("--kitty"), "{short}");
@@ -83,6 +106,20 @@ mod tests {
 
         let long = command.render_long_help().to_string();
         assert!(long.contains("--kitty"), "{long}");
+        assert!(long.contains(hint), "{long}");
+    }
+
+    #[test]
+    fn sixel_hint_is_appended_to_both_help_forms() {
+        let hint = "This terminal supports the Sixel graphics protocol.";
+        let mut command = add_sixel_hint(Cli::command(), hint);
+
+        let short = command.render_help().to_string();
+        assert!(short.contains("--sixel"), "{short}");
+        assert!(short.contains(". This terminal supports"), "{short}");
+
+        let long = command.render_long_help().to_string();
+        assert!(long.contains("--sixel"), "{long}");
         assert!(long.contains(hint), "{long}");
     }
 }

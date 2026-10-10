@@ -40,6 +40,10 @@ $ qrtxt "hi"
   the Kitty graphics protocol, which can be smaller than the block-glyph
   rendering (kitty, Ghostty, WezTerm); unsupported terminals fail fast instead
   of printing garbage.
+- **Sixel rendering** — `--sixel` draws the same bitmap through the Sixel
+  graphics protocol, covering a different set of terminals (xterm, Konsole, foot,
+  Windows Terminal, …); unsupported terminals fail fast instead of printing
+  garbage.
 - **Dark and light terminals** — `--invert` handles light backgrounds.
 - **Long payloads** — input too long for one symbol is split automatically across
   balanced codes; `--max-bytes` caps the bytes per code, `--chunk` sets a floor on
@@ -88,6 +92,7 @@ Options:
   -c, --chunk <COUNT>             Split the payload across at least COUNT QR codes; advisory (default: no minimum)
   -a, --no-compact                Render with ANSI escape codes instead of Unicode block characters
   -k, --kitty                     Draw a smaller QR as a bitmap through the Kitty graphics protocol
+  -s, --sixel                     Draw a smaller QR as a bitmap through the Sixel graphics protocol
   -f, --file <PATH>               Read the payload from a file
   -p, --preserve-newline          Keep one trailing newline from file or piped input
   -b, --border <BORDER>           Quiet-zone width in modules; 0 removes the margin [default: 4]
@@ -124,6 +129,9 @@ qrtxt --glyphs braille "hello"
 
 # crisp black-and-white bitmap (needs a Kitty-protocol terminal)
 qrtxt --kitty "https://example.com"
+
+# crisp black-and-white bitmap (needs a Sixel-protocol terminal)
+qrtxt --sixel "https://example.com"
 
 # light-background terminal
 qrtxt --invert "hello"
@@ -169,6 +177,28 @@ glyph set is ignored.
 The same probe runs for `--help`, so when standard output is a terminal the
 `--kitty` entry ends with a one-line verdict for the current terminal.
 
+## Sixel graphics protocol
+
+`--sixel` (`-s`) draws the same black-and-white bitmap as `--kitty`, but through
+the older [Sixel graphics format](https://en.wikipedia.org/wiki/Sixel). The two
+cover different terminals: Sixel reaches xterm, Konsole, foot, mlterm, iTerm2, and
+Windows Terminal (1.22+), which do not implement the Kitty protocol, while kitty
+and Ghostty implement Kitty but not Sixel. Because a QR code has only two colours,
+the Sixel output uses two palette registers and run-length encoding, so it is
+compact.
+
+Support detection is weaker than Kitty's: Sixel has no handshake, so `qrtxt` sends
+a Primary Device Attributes query and only accepts terminals that advertise Sixel
+(device attribute `4`). A terminal that supports Sixel without advertising it is
+treated as unsupported, so the tool never prints escape bytes a terminal cannot
+draw. As with `--kitty`, the output is pure black and white with its own white
+quiet zone, `--invert` swaps the two colours, and the glyph set is ignored. The
+`--help` probe appends a verdict to the `--sixel` entry the same way.
+
+The image declares square pixels, so the modules stay square on terminals that
+honour the raster attributes — but Sixel rendering has not been visually verified
+on every terminal, so check that a printed code still scans.
+
 ## Long payloads
 
 One QR symbol holds a bounded amount of data (about 2953 bytes at level `L`, less
@@ -210,16 +240,16 @@ The crate is layered so that dependencies point in one direction only:
 
 - `cli` parses arguments and orchestrates the run (`run` / `run_with`).
 - `input`, `encode`, and `render` are pure and do not depend on `clap`.
-- `kitty` holds the low-level protocol framing, shared by `cli` (the terminal
-  probe) and `render` (bitmap transmission).
+- `kitty` and `sixel` hold the low-level protocol framing, shared by `cli` (the
+  terminal probes) and `render` (bitmap transmission).
 - `types` holds the shared value types; `error` maps failures to exit codes.
 
 Rendering happens in two steps: `build_ink` turns the QR matrix into a boolean
 "ink" grid (applying the quiet zone and inversion), and `render` packs that grid
-into character cells per glyph set. `render_kitty` bypasses the grid and emits a
-black-and-white bitmap over the Kitty protocol. The round-trip test suite renders
-the output, reconstructs the module grid, and decodes it again with `rqrr` to
-prove the printed code is still scannable.
+into character cells per glyph set. `render_kitty` and `render_sixel` bypass the
+grid and emit a black-and-white bitmap over the Kitty or Sixel protocol. The
+round-trip test suite renders the output, reconstructs the module grid, and
+decodes it again with `rqrr` to prove the printed code is still scannable.
 
 ## License
 

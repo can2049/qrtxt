@@ -74,6 +74,8 @@ pub enum RenderMode {
     Ansi,
     /// Bitmap rendering via the Kitty graphics protocol (FR-3.12).
     Kitty,
+    /// Bitmap rendering via the Sixel graphics protocol (FR-3.13).
+    Sixel,
 }
 
 /// Where the payload is read from.

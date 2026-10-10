@@ -97,7 +97,8 @@ input -> encode -> render::render_kitty -> kitty::transmit_rgb -> stdout
 
 - **实机确认（阻塞项）**：在 kitty / Ghostty / WezTerm 下核对显示效果与 `a=T` 之后的
   光标 / 换行排版（本开发环境为 VS Code 终端，**无法目视验证**；可扫性已由测试保证）。
-- 可选增强：每模块像素倍率可配置、显示后清理图像、Sixel 回退。
+- 可选增强：每模块像素倍率可配置、显示后清理图像。Sixel 已作为并列模式实现
+  （`--sixel`），见 [sixel-graphics-protocol.md](./sixel-graphics-protocol.md)。
 
 参考：Kitty 图形协议规范 https://sw.kovidgoyal.net/kitty/graphics-protocol/ ；
 `rustix` termios https://docs.rs/rustix/latest/rustix/termios/ 。
