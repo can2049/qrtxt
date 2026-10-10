@@ -218,10 +218,10 @@ pub fn render_ansi(frame: &Frame, out: &mut dyn Write) -> io::Result<()> {
 }
 
 /// Target rendered size, in pixels; the per-module scale is derived from it.
-const KITTY_TARGET_PX: usize = 600;
+const KITTY_TARGET_PX: usize = 300;
 /// Bounds on the pixels-per-module scale.
 const KITTY_MIN_MODULE_PX: usize = 2;
-const KITTY_MAX_MODULE_PX: usize = 16;
+const KITTY_MAX_MODULE_PX: usize = 8;
 
 /// Render `qr` as a black-and-white bitmap through the Kitty graphics protocol
 /// (FR-3.12).
@@ -306,13 +306,14 @@ mod tests {
         // The image spans many chunks, so the first chunk carries the full control
         // block and sets `m=1` (more to come).
         assert!(
-            text.contains(&format!(
-                "a=T,f=24,s={image_px},v={image_px},i=424242,m=1;"
-            )),
+            text.contains(&format!("a=T,f=24,s={image_px},v={image_px},i=424242,m=1;")),
             "missing or incorrect first-chunk control block"
         );
         // The top-left pixel is the quiet zone, drawn light (white) by default.
-        assert!(first_payload(&text).starts_with("////"), "quiet zone is not white");
+        assert!(
+            first_payload(&text).starts_with("////"),
+            "quiet zone is not white"
+        );
     }
 
     #[test]
@@ -322,7 +323,10 @@ mod tests {
         render_kitty(&qr, 4, true, 7, &mut out).unwrap();
         let text = String::from_utf8(out).unwrap();
         // Inverted: the light quiet zone becomes black.
-        assert!(first_payload(&text).starts_with("AAAA"), "quiet zone is not black");
+        assert!(
+            first_payload(&text).starts_with("AAAA"),
+            "quiet zone is not black"
+        );
     }
 
     #[test]

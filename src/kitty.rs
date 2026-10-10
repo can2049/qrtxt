@@ -141,7 +141,10 @@ mod tests {
         let text = String::from_utf8(out).unwrap();
         assert_eq!(text.matches("\x1b_G").count(), 2, "expected two chunks");
         let chunks: Vec<&str> = text.split("\x1b_G").skip(1).collect();
-        assert!(chunks[0].contains("a=T,f=24,s=65,v=16,i=1,m=1;"), "{text:?}");
+        assert!(
+            chunks[0].contains("a=T,f=24,s=65,v=16,i=1,m=1;"),
+            "{text:?}"
+        );
         assert!(chunks[1].starts_with("m=0;"), "{text:?}");
     }
 

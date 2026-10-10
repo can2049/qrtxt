@@ -524,3 +524,31 @@ fn kitty_bitmap_round_trips() {
         assert_eq!(decoded, payload, "invert={invert} payload={payload:?}");
     }
 }
+
+#[test]
+fn kitty_multi_code_round_trips() {
+    use qrtxt::types::Ec;
+
+    // A payload split across several codes: each must render as its own
+    // decodable bitmap holding that code's (distinct) segment. Regression: when
+    // the codes shared one image id the terminal dropped every bitmap but the
+    // last, so earlier codes appeared unrendered.
+    let payload: String = (0..600).map(|i| (b'a' + (i % 26) as u8) as char).collect();
+    let codes = qrtxt::encode::encode_multi(payload.as_bytes(), Ec::L, None, Some(3)).unwrap();
+    assert!(codes.len() > 1, "payload should split into several codes");
+
+    let mut assembled = String::new();
+    for (index, qr) in codes.iter().enumerate() {
+        // A fresh id per code is what keeps every bitmap on screen.
+        let id = 424_242 + index as u32;
+        let mut buf = Vec::new();
+        qrtxt::render::render_kitty(qr, DEFAULT_BORDER as u32, false, id, &mut buf).unwrap();
+
+        let side = qr.width() + 2 * DEFAULT_BORDER;
+        let ink = parse_kitty(&buf, side, false);
+        let part = decode(side, side, &ink, qr.width(), true);
+        assert!(!part.is_empty(), "empty bitmap for code {}", index + 1);
+        assembled.push_str(&part);
+    }
+    assert_eq!(assembled, payload, "codes did not reassemble in order");
+}

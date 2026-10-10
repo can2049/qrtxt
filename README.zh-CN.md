@@ -33,7 +33,7 @@ $ qrtxt "hi"
 - **精确纠错等级** —— `L`、`M`、`Q`、`H`,不做自动升档。
 - **三种字形集** —— 半块(默认)、象限块、盲文点阵,在可扫性与屏幕密度之间取舍。
 - **ANSI 渲染** —— `--no-compact`,用于不支持块字符的终端。
-- **位图渲染** —— `--kitty` 通过 Kitty 图形协议绘制清晰的黑白位图(kitty、Ghostty、WezTerm);不支持的终端会快速报错,而不是打印乱码。
+- **位图渲染** —— `--kitty` 通过 Kitty 图形协议绘制清晰的黑白位图,可比块字符渲染更小(kitty、Ghostty、WezTerm);不支持的终端会快速报错,而不是打印乱码。
 - **深色/浅色终端** —— `--invert` 适配浅色背景。
 - **超长内容** —— 放不进单个二维码的内容会自动均分成多个二维码;`--max-size` 可限制每个二维码的字节数,`--chunk` 可指定二维码数量的下限。
 - **默认安全** —— 无 `unsafe` 代码,错误信息绝不回显 payload。
@@ -72,7 +72,7 @@ qrtxt [OPTIONS] [DATA]
   -m, --max-size <BYTES>         限制每个二维码的负载为 BYTES 字节;会触发拆分(默认: 单个符号自身的上限)
   -c, --chunk <COUNT>            把负载拆分成至少 COUNT 个二维码;引导性(默认: 无下限)
   -a, --no-compact               用 ANSI 转义序列渲染,替代 Unicode 块字符
-  -k, --kitty                    用 Kitty 图形协议渲染位图(需要终端支持)
+  -k, --kitty                    通过 Kitty 图形协议把二维码画成更小的位图
   -f, --file <PATH>              从文件读取 payload
   -p, --preserve-newline         保留文件/管道输入尾部的一个换行
   -b, --border <BORDER>          静默区宽度(模块数);0 表示去掉留白 [默认: 4]
@@ -138,11 +138,14 @@ qrtxt --chunk 4 "a-short-but-verifiable-payload"
 ## Kitty 图形协议
 
 `--kitty`(`-k`)改用 [Kitty 图形协议](https://sw.kovidgoyal.net/kitty/graphics-protocol/)
-把二维码绘制成真正的位图,不再受字体如何渲染块字符的限制。它需要终端实现该协议
+把二维码绘制成真正的位图,不再受字体如何渲染块字符的限制,因此画得更小。它需要终端实现该协议
 ——例如 kitty、Ghostty、WezTerm。`qrtxt` 会先用 `a=q` 握手探测终端;若协议不受支持
 (或标准输出不是终端),则直接以用法错误退出,而不是输出终端无法渲染的转义字节。
 输出为纯黑白,并自带白色静默区,因此 `--invert` 会交换两种颜色而二维码保持自洽;
 字形集选项被忽略。
+
+`--help` 也会执行同一次探测:当标准输出是终端时,`--kitty` 选项说明末尾会附上当前
+终端是否支持的一行结论。
 
 ## 超长内容
 

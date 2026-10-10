@@ -2,7 +2,7 @@
 
 use std::io::{IsTerminal, Write};
 
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use qrcode::QrCode;
 
 use crate::error::AppError;
@@ -95,14 +95,15 @@ pub struct Cli {
     #[arg(short = 'a', long = "no-compact")]
     pub no_compact: bool,
 
-    /// Render as a bitmap with the Kitty graphics protocol instead of Unicode
-    /// block characters.
+    /// Draw a smaller QR as a bitmap through the Kitty graphics protocol.
     ///
-    /// Requires a terminal that implements the protocol (for example kitty,
-    /// Ghostty, or WezTerm). qrtxt probes the terminal with an `a=q` handshake
-    /// and, if it is unsupported (or standard output is not a terminal), fails
-    /// with a usage error rather than print unusable escape bytes. The glyph set
-    /// is ignored; `--invert` swaps the two colours.
+    /// A bitmap is not limited by the font, so every module stays crisp and the
+    /// code can be much smaller than the block-glyph rendering. It needs a
+    /// terminal that implements the protocol — kitty, Ghostty, or WezTerm, for
+    /// example. qrtxt probes the terminal with an `a=q` handshake and, if it is
+    /// unsupported (or standard output is not a terminal), fails with a usage
+    /// error rather than print unusable escape bytes. The glyph set is ignored;
+    /// `--invert` swaps the two colours.
     #[arg(short = 'k', long = "kitty", conflicts_with = "no_compact")]
     pub kitty: bool,
 
@@ -247,10 +248,26 @@ const KITTY_PROBE_ID: u32 = 1_000_000;
 /// terminal that cannot draw the bitmap is a hard error: printing escape bytes it
 /// cannot interpret would only spew garbage.
 fn ensure_kitty_supported() -> Result<(), AppError> {
-    if !std::io::stdout().is_terminal() {
-        return Err(AppError::Usage(
+    match probe_kitty_terminal()? {
+        Some(true) => Ok(()),
+        Some(false) => Err(AppError::Usage(
+            "kitty: this terminal does not support the Kitty graphics protocol \
+             (try kitty, Ghostty, or WezTerm)"
+                .to_string(),
+        )),
+        None => Err(AppError::Usage(
             "kitty: standard output is not a terminal".to_string(),
-        ));
+        )),
+    }
+}
+
+/// Probe the controlling terminal for Kitty graphics support (FR-3.12).
+///
+/// Returns `Ok(None)` when there is no terminal to ask (standard output is not a
+/// terminal); otherwise `Ok(Some(true/false))` from the `a=q` handshake.
+fn probe_kitty_terminal() -> Result<Option<bool>, AppError> {
+    if !std::io::stdout().is_terminal() {
+        return Ok(None);
     }
     let mut tty = std::fs::OpenOptions::new()
         .read(true)
@@ -260,17 +277,60 @@ fn ensure_kitty_supported() -> Result<(), AppError> {
             context: "kitty: cannot open the controlling terminal",
             source,
         })?;
-    match probe_kitty(&mut tty) {
-        Ok(true) => Ok(()),
-        Ok(false) => Err(AppError::Usage(
-            "kitty: this terminal does not support the Kitty graphics protocol \
-             (try kitty, Ghostty, or WezTerm)"
-                .to_string(),
-        )),
-        Err(source) => Err(AppError::Io {
+    probe_kitty(&mut tty)
+        .map(Some)
+        .map_err(|source| AppError::Io {
             context: "kitty: cannot query the terminal",
             source,
-        }),
+        })
+}
+
+/// A one-line hint about the current terminal's Kitty support, for `--help`
+/// (FR-3.12).
+///
+/// Runs the same `a=q` handshake as [`run_with`], but never fails: it returns
+/// `None` when there is no terminal to probe or the probe errors, so the help
+/// text stays truthful rather than guessing.
+#[must_use]
+pub fn kitty_support_hint() -> Option<String> {
+    hint_for(probe_kitty_terminal().ok().flatten())
+}
+
+/// Map a probe result to the help hint; `None` means there was nothing to probe.
+fn hint_for(support: Option<bool>) -> Option<String> {
+    match support {
+        Some(true) => Some("This terminal supports it.".to_string()),
+        Some(false) => Some("This terminal does not support it.".to_string()),
+        None => None,
+    }
+}
+
+/// The clap command with a live Kitty support `hint` appended to the `--kitty`
+/// option's help.
+///
+/// Used only when help is being shown, so the probe cost is paid once. The short
+/// and long help both gain the hint.
+#[must_use]
+pub fn command_with_kitty_hint(hint: &str) -> clap::Command {
+    Cli::command().mut_arg("kitty", |arg| {
+        let short = arg.get_help().map(ToString::to_string).unwrap_or_default();
+        let long = arg
+            .get_long_help()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| short.clone());
+        // clap strips the trailing stop from the short help, so restore it before
+        // appending, otherwise the two sentences run together.
+        arg.help(format!("{} {hint}", end_with_period(short.trim_end())))
+            .long_help(format!("{}\n\n{hint}", long.trim_end()))
+    })
+}
+
+/// `text` with a trailing full stop, adding one only when it is missing.
+fn end_with_period(text: &str) -> String {
+    if text.ends_with('.') {
+        text.to_string()
+    } else {
+        format!("{text}.")
     }
 }
 
@@ -479,33 +539,46 @@ mod tests {
     }
 
     #[test]
-    fn render_all_kitty_uses_a_distinct_image_id_per_code() {
-        // Reusing one image id would make the terminal replace earlier codes, so
-        // every transmitted bitmap must carry its own id.
+    fn render_all_kitty_renders_every_code_with_its_own_image_id() {
+        // Regression: every code once shared one image id, so the terminal
+        // replaced every bitmap but the last and the earlier codes looked
+        // unrendered. Each code must now be transmitted as its own image with a
+        // distinct id, in order.
         let cfg = parse(&["-k", "-e", "L", "x"]).to_config();
         let codes =
-            crate::encode::encode_multi(&vec![b'x'; 4000], cfg.ec, cfg.max_size, cfg.min_chunks)
+            crate::encode::encode_multi(&vec![b'x'; 6000], cfg.ec, cfg.max_size, cfg.min_chunks)
                 .unwrap();
-        assert!(codes.len() > 1, "payload should split");
+        assert!(codes.len() >= 3, "payload should split into several codes");
+
         let mut out = Vec::new();
         render_all(&cfg, &codes, &mut out).unwrap();
         let text = String::from_utf8(out).unwrap();
 
-        // Only the first chunk of each image carries the control block with `i=`.
-        let ids: Vec<&str> = text
+        // Exactly one "transmit and display" control block per code: nothing is
+        // skipped, and no image is emitted more than once.
+        assert_eq!(
+            text.matches("a=T,f=24,").count(),
+            codes.len(),
+            "each code must be transmitted exactly once"
+        );
+
+        // Ids are assigned in order, one per code, so an earlier image is never
+        // overwritten by a later one.
+        let ids: Vec<u32> = text
             .match_indices(",i=")
             .map(|(start, _)| {
                 let rest = &text[start + 3..];
-                &rest[..rest.find(',').expect("id is followed by another control key")]
+                rest[..rest
+                    .find(',')
+                    .expect("id is followed by another control key")]
+                    .parse()
+                    .expect("numeric image id")
             })
             .collect();
-        assert_eq!(ids.len(), codes.len(), "one image id per code: {ids:?}");
-        let unique: std::collections::BTreeSet<&str> = ids.iter().copied().collect();
-        assert_eq!(
-            unique.len(),
-            codes.len(),
-            "image ids must be distinct: {ids:?}"
-        );
+        let expected: Vec<u32> = (0..codes.len() as u32)
+            .map(|index| KITTY_IMAGE_ID_BASE + index)
+            .collect();
+        assert_eq!(ids, expected, "image ids must be distinct and in order");
     }
 
     #[test]
@@ -565,5 +638,29 @@ mod tests {
     #[test]
     fn kitty_conflicts_with_no_compact() {
         assert!(Cli::try_parse_from(["qrtxt", "--kitty", "--no-compact", "x"]).is_err());
+    }
+
+    #[test]
+    fn support_hint_reflects_the_probe_result() {
+        // Tested through the pure mapping: the live probe depends on the ambient
+        // terminal, which would make this test fail under an interactive one.
+        assert_eq!(hint_for(None), None);
+        assert!(hint_for(Some(true)).unwrap().contains("supports it"));
+        assert!(hint_for(Some(false)).unwrap().contains("does not support"));
+    }
+
+    #[test]
+    fn kitty_hint_is_appended_to_both_help_forms() {
+        let hint = "This terminal supports the Kitty graphics protocol.";
+        let mut command = command_with_kitty_hint(hint);
+
+        let short = command.render_help().to_string();
+        assert!(short.contains("--kitty"), "{short}");
+        // The stripped stop is restored so the hint starts a new sentence.
+        assert!(short.contains(". This terminal supports"), "{short}");
+
+        let long = command.render_long_help().to_string();
+        assert!(long.contains("--kitty"), "{long}");
+        assert!(long.contains(hint), "{long}");
     }
 }

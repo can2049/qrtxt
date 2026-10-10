@@ -54,7 +54,7 @@
 
 - **`kitty`（新增，纯逻辑）**：协议封帧、base64、分块、探测序列、响应解析。
 - **`render::render_kitty`**：把 QR 矩阵转成 RGB 位图 ——
-  `side = qr.width() + 2*border` 模块；`module_px = (600/side).clamp(2,16)`；
+  `side = qr.width() + 2*border` 模块；`module_px = (300/side).clamp(2,8)`；
   暗模块→黑、亮模块→白（`--invert` 交换），静默区为亮色；随后交给
   `kitty::transmit_rgb` 并补一个换行。
 - **`cli`**：负责 `-k/--kitty` 开关、模式选择、探测、错误映射；`run` 仍只写字节，
@@ -64,6 +64,12 @@
 
 - 新增 `-k, --kitty`（与 `--no-compact` 互斥）；`--glyphs` 在位图模式下被忽略。
 - 退出码沿用既有约定：`stdout` 非终端 / 协议不支持 → 用法错误 **退出码 2**。
+
+### 2.5 帮助里的支持提示
+
+`qrtxt --help` / `-h` 时，`main` 先请求一次探测，把「当前终端是否支持」这句话拼到
+`--kitty` 选项说明的短/长帮助末尾（`cli::kitty_support_hint` + `cli::command_with_kitty_hint`）。
+仅当 `stdout` 是终端才探测，管道里的 `-h` 不加提示；探测失败一律静默、只省略提示。
 
 ---
 
@@ -88,16 +94,22 @@
 > `a=T` 用重复 id 传输时，终端会替换已存图像并丢弃其放置（placement），结果只剩
 > 最后一个码可见，前面的码全部消失（表现为 `qrtxt -f README.zh-CN.md -k` 只显示
 > 第 3 个二维码）。现改为：`render_kitty` 接收 id 参数，`cli::render_all` 按
-> `424242 + index` 逐码分配；回归测试 `render_all_kitty_uses_a_distinct_image_id_per_code`
-> 断言每个码的 id 互不相同。
+> `424242 + index` 逐码分配；回归测试 `render_all_kitty_renders_every_code_with_its_own_image_id`
+> 断言每个码各发一次图像、id 有序且互不相同。
 
 ---
 
 ## 四、测试与验证
 
-- `cargo test`：**114 项全部通过**（lib 74 + cli 23 + roundtrip 17），无警告。
+- `cargo test`：**117 项全部通过**（lib 76 + cli 23 + roundtrip 18），无警告。
 - **可扫性**：`kitty_bitmap_round_trips` 把渲染出的 APC 序列解析回模块网格，
   再交给 `rqrr` 解码，覆盖普通 / URL / 中文 / 反相 payload。
+- **多码回归**：`render_all_kitty_renders_every_code_with_its_own_image_id`（逐码 id 唯一）
+  与 `kitty_multi_code_round_trips`（多码各自渲染成可解码位图并顺序重组）；把
+  `render_all` 改回复用同一 id 会让前者立刻失败。
+- **帮助提示**：`kitty_hint_is_appended_to_both_help_forms` 断言提示拼进短/长帮助；
+  另用 pty 模拟终端验证——回复 `;OK` 显示 `This terminal supports it.`、无回复（超时）
+  显示 `This terminal does not support it.`，管道里的 `-h` 不带提示。
 - **错误路径已实测**：
   - `qrtxt --kitty hello`（stdout 非终端）→ `kitty: standard output is not a terminal`，退出码 2。
   - `qrtxt --kitty --no-compact hello` → clap 冲突报错，退出码 2。
@@ -109,7 +121,7 @@
 
 1. **实机确认**（阻塞项）：在 kitty / Ghostty / WezTerm 下人工确认显示效果，重点看
    `a=T` 之后的**光标与换行排版**是否符合预期。
-2. **可配置化**（可选）：把每模块像素倍率/目标尺寸（当前 `600px`、`clamp(2,16)`）
+2. **可配置化**（可选）：把每模块像素倍率/目标尺寸（当前 `300px`、`clamp(2,8)`）
    做成参数，便于按屏幕缩放。
 3. **图像生命周期**（可选）：已为多码输出逐码分配唯一 id；仍可增加显示后清理/复用，
    避免长列表在高频运行时在终端残留图像。

@@ -36,8 +36,9 @@ $ qrtxt "hi"
   robustness for screen density.
 - **ANSI rendering** — `--no-compact` for terminals without block glyphs.
 - **Bitmap rendering** — `--kitty` draws a crisp black-and-white bitmap through
-  the Kitty graphics protocol (kitty, Ghostty, WezTerm); unsupported terminals
-  fail fast instead of printing garbage.
+  the Kitty graphics protocol, which can be smaller than the block-glyph
+  rendering (kitty, Ghostty, WezTerm); unsupported terminals fail fast instead
+  of printing garbage.
 - **Dark and light terminals** — `--invert` handles light backgrounds.
 - **Long payloads** — input too long for one symbol is split automatically across
   balanced codes; `--max-size` caps the bytes per code, `--chunk` sets a floor on
@@ -78,7 +79,7 @@ Options:
   -m, --max-size <BYTES>          Cap the payload of each QR code at BYTES bytes; implies splitting (default: the symbol's own limit)
   -c, --chunk <COUNT>             Split the payload across at least COUNT QR codes; advisory (default: no minimum)
   -a, --no-compact                Render with ANSI escape codes instead of Unicode block characters
-  -k, --kitty                     Render as a bitmap with the Kitty graphics protocol (requires terminal support)
+  -k, --kitty                     Draw a smaller QR as a bitmap through the Kitty graphics protocol
   -f, --file <PATH>               Read the payload from a file
   -p, --preserve-newline          Keep one trailing newline from file or piped input
   -b, --border <BORDER>           Quiet-zone width in modules; 0 removes the margin [default: 4]
@@ -148,13 +149,17 @@ dark-on-light code. `qrtxt` never queries the terminal background itself.
 `--kitty` (`-k`) draws the code as a real bitmap using the
 [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/)
 instead of Unicode glyphs, so it is not limited by how the font renders block
-characters. It needs a terminal that implements the protocol — kitty, Ghostty,
+characters and can be much smaller. It needs a terminal that implements the
+protocol — kitty, Ghostty,
 and WezTerm, for example. `qrtxt` probes the terminal with an `a=q` handshake
 first; if the protocol is unsupported (or standard output is not a terminal) it
 stops with a usage error rather than emit escape bytes the terminal cannot
 render. The output is pure black and white and carries its own white quiet zone,
 so `--invert` swaps the two colours while the code stays self-contained; the
 glyph set is ignored.
+
+The same probe runs for `--help`, so when standard output is a terminal the
+`--kitty` entry ends with a one-line verdict for the current terminal.
 
 ## Long payloads
 
