@@ -107,21 +107,21 @@ fn oversized_input_splits_automatically() {
     // Lowercase forces byte mode; 4000 bytes exceeds version 40-L (~2953).
     let payload = "x".repeat(4000);
     let text = stdout(&["-e", "L", &payload]);
-    assert!(text.contains("QR 1/"), "missing first caption");
-    assert!(text.contains("QR 2/"), "missing second caption");
+    assert!(text.contains("QR Code 1/"), "missing first caption");
+    assert!(text.contains("QR Code 2/"), "missing second caption");
 }
 
 #[test]
 fn input_within_one_symbol_has_no_caption() {
-    assert!(!stdout(&["hello"]).contains("QR "));
+    assert!(!stdout(&["hello"]).contains("QR Code "));
 }
 
 #[test]
 fn max_bytes_splits_into_smaller_codes() {
     let payload = "a".repeat(250);
     let text = stdout(&["-e", "L", "--max-bytes", "100", &payload]);
-    assert!(text.contains("QR 1/3"), "missing first caption");
-    assert!(text.contains("QR 3/3"), "missing last caption");
+    assert!(text.contains("QR Code 1/3"), "missing first caption");
+    assert!(text.contains("QR Code 3/3"), "missing last caption");
 }
 
 #[test]
@@ -146,14 +146,14 @@ fn chunk_splits_into_at_least_the_requested_count() {
     // 100 bytes fit one symbol, but --chunk 4 forces four balanced codes.
     let payload = "a".repeat(100);
     let text = stdout(&["-e", "L", "--chunk", "4", &payload]);
-    assert!(text.contains("QR 1/4"), "missing first caption");
-    assert!(text.contains("QR 4/4"), "missing last caption");
+    assert!(text.contains("QR Code 1/4"), "missing first caption");
+    assert!(text.contains("QR Code 4/4"), "missing last caption");
 }
 
 #[test]
 fn chunk_short_flag_and_zero_rejection() {
     let payload = "a".repeat(100);
-    assert!(stdout(&["-c", "4", &payload]).contains("QR 4/4"));
+    assert!(stdout(&["-c", "4", &payload]).contains("QR Code 4/4"));
     qrtxt()
         .args(["--chunk", "0", "hello"])
         .assert()
@@ -266,8 +266,11 @@ fn datamatrix_short_format_is_accepted() {
 fn datamatrix_splits_with_its_own_caption() {
     let payload = "a".repeat(4000);
     let text = stdout(&["--format", "datamatrix", "-e", "L", &payload]);
-    assert!(text.contains("DM 1/"), "missing datamatrix caption");
-    assert!(!text.contains("QR "), "leaked a QR caption");
+    assert!(
+        text.contains("Data Matrix 1/"),
+        "missing datamatrix caption"
+    );
+    assert!(!text.contains("QR Code "), "leaked a QR caption");
 }
 
 #[test]
