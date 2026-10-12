@@ -779,6 +779,23 @@ fn datamatrix_crop(ink: &[bool], width: usize, invert: bool) -> (usize, Vec<bool
     (size, dark)
 }
 
+/// Encode `text` with the `datamatrix` crate exactly as qrtxt does (square only).
+fn crate_datamatrix(text: &str) -> datamatrix::DataMatrix {
+    datamatrix::DataMatrix::encode_str(text, datamatrix::SymbolList::default().enforce_square())
+        .expect("encodes")
+}
+
+/// Row-major dark grid of a crate Data Matrix symbol (`true` = dark module).
+fn crate_dark_grid(code: &datamatrix::DataMatrix) -> (usize, Vec<bool>) {
+    let bitmap = code.bitmap();
+    let (width, height) = (bitmap.width(), bitmap.height());
+    let mut dark = vec![false; width * height];
+    for (x, y) in bitmap.pixels() {
+        dark[y * width + x] = true;
+    }
+    (width, dark)
+}
+
 #[test]
 fn datamatrix_ascii_round_trips() {
     // The crate decoder surfaces raw bytes only when there is no ECI, so ASCII
@@ -810,7 +827,7 @@ fn datamatrix_grid_matches_the_encoder() {
     // The crate decoder refuses ECI-tagged symbols as raw bytes, so UTF-8 is
     // verified by reproducing the encoder's own symbol through the CLI and
     // renderer: the printed dark grid must equal the encoded symbol exactly.
-    for payload in ["hello", "你好，世界", "混合 mixed 123 😀"] {
+    for &payload in CJK_SAMPLES {
         for (glyph, invert) in [("half", false), ("quadrant", false), ("braille", true)] {
             let (size, dark) = datamatrix_dark_grid(payload, glyph, invert);
             let symbols = qrtxt::encode::encode_multi(
@@ -843,6 +860,67 @@ fn datamatrix_split_round_trips_in_order() {
     let text = render(&["--format", "datamatrix", "-e", "L", &payload]);
     let blocks = multi_blocks(&text);
     assert!(blocks.len() > 1, "expected the payload to split");
+    let mut assembled = String::new();
+    for block in &blocks {
+        let (width, _height, ink) = parse(block, "half");
+        let (size, dark) = datamatrix_crop(&ink, width, false);
+        let part = datamatrix::DataMatrix::decode(&dark, size).expect("decodes");
+        assembled.push_str(std::str::from_utf8(&part).expect("ascii"));
+    }
+    assert_eq!(assembled, payload);
+}
+
+#[test]
+fn datamatrix_cjk_round_trips() {
+    use qrtxt::types::{Ec, Format};
+
+    // `DataMatrix::decode` refuses ECI-tagged symbols as raw bytes, so CJK is
+    // verified in two composing halves: the crate's own symbol decodes back to
+    // the exact text, and qrtxt encodes that text to the very same symbol.
+    for &text in CJK_SAMPLES {
+        let code = crate_datamatrix(text);
+        let decoded = datamatrix::data::decode_str(code.data_codewords()).expect("decodes");
+        assert_eq!(&decoded, text, "crate round trip for {text:?}");
+
+        let symbols =
+            qrtxt::encode::encode_multi(text.as_bytes(), Format::DataMatrix, Ec::L, None, None)
+                .unwrap();
+        assert_eq!(symbols.len(), 1, "payload should fit one symbol: {text:?}");
+        let symbol = &symbols[0];
+        let (width, dark) = crate_dark_grid(&code);
+        assert_eq!(symbol.width(), width, "payload={text:?}");
+        for y in 0..width {
+            for x in 0..width {
+                assert_eq!(
+                    dark[y * width + x],
+                    symbol.is_dark(x, y),
+                    "payload={text:?} at ({x},{y})"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn datamatrix_symbol_sizes_round_trip() {
+    // The smallest symbol and a larger one, across glyph sets.
+    for len in [1usize, 3, 300] {
+        let payload = "a".repeat(len);
+        for glyph in ["half", "quadrant", "braille"] {
+            let (size, dark) = datamatrix_dark_grid(&payload, glyph, false);
+            let decoded = datamatrix::DataMatrix::decode(&dark, size).expect("decodes");
+            assert_eq!(decoded, payload.as_bytes(), "len={len} glyph={glyph}");
+        }
+    }
+}
+
+#[test]
+fn datamatrix_max_bytes_split_round_trips_in_order() {
+    // --max-bytes caps each symbol and forces a split.
+    let payload = "a".repeat(600);
+    let text = render(&["--format", "datamatrix", "--max-bytes", "100", &payload]);
+    let blocks = multi_blocks(&text);
+    assert_eq!(blocks.len(), 6, "600 bytes at 100 bytes per symbol");
     let mut assembled = String::new();
     for block in &blocks {
         let (width, _height, ink) = parse(block, "half");
