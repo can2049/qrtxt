@@ -7,9 +7,7 @@
 
 use std::io::{self, Write};
 
-use qrcode::{Color, QrCode};
-
-use crate::types::GlyphSet;
+use crate::types::{GlyphSet, Symbol};
 
 /// A boolean "ink" grid; `true` means "draw as ink" (foreground).
 #[derive(Debug)]
@@ -71,26 +69,23 @@ fn round_up(value: usize, multiple: usize) -> usize {
 /// Build the ink grid: quiet zone (background), optional inversion, padded to a
 /// whole number of glyph tiles.
 #[must_use]
-pub fn build_ink(qr: &QrCode, border: u32, invert: bool, glyph: GlyphSet) -> Frame {
-    let src = qr.width();
-    let colors = qr.to_colors();
+pub fn build_ink(symbol: &Symbol, border: u32, invert: bool, glyph: GlyphSet) -> Frame {
+    let src_w = symbol.width();
+    let src_h = symbol.height();
     let b = border as usize;
     let (tile_w, tile_h) = glyph.tile();
-    let width = round_up(src + 2 * b, tile_w);
-    let height = round_up(src + 2 * b, tile_h);
-
-    // Default: light modules are ink (FR-3.8); `invert` flips it (FR-3.9).
-    let is_ink = |color: Color| -> bool {
-        let light = matches!(color, Color::Light);
-        light ^ invert
-    };
+    let width = round_up(src_w + 2 * b, tile_w);
+    let height = round_up(src_h + 2 * b, tile_h);
 
     let mut ink = vec![false; width * height];
     for y in 0..height {
-        let row_in_matrix = y >= b && y < b + src;
+        let row_in_matrix = y >= b && y < b + src_h;
         for x in 0..width {
-            ink[y * width + x] = if row_in_matrix && x >= b && x < b + src {
-                is_ink(colors[(y - b) * src + (x - b)])
+            let col_in_matrix = x >= b && x < b + src_w;
+            ink[y * width + x] = if row_in_matrix && col_in_matrix {
+                // Default: light modules are ink (FR-3.8); `invert` flips it (FR-3.9).
+                let light = !symbol.is_dark(x - b, y - b);
+                light ^ invert
             } else {
                 false // quiet zone and tile padding stay background
             };
@@ -223,56 +218,64 @@ const TARGET_PX: usize = 300;
 const MIN_MODULE_PX: usize = 3;
 const MAX_MODULE_PX: usize = 8;
 
-/// A QR scaled to a square pixel bitmap: `image_px` pixels per side, `true` marks
-/// a dark pixel.
+/// A symbol scaled to a pixel bitmap: `width_px` x `height_px` pixels, with
+/// `true` marking a dark pixel.
 struct Bitmap {
-    image_px: usize,
+    width_px: usize,
+    height_px: usize,
     dark: Vec<bool>,
 }
 
-/// Scale `qr`, plus its quiet zone, to a square pixel bitmap — one crisp block of
-/// pixels per module.
-fn module_bitmap(qr: &QrCode, border: u32) -> Bitmap {
-    let src = qr.width();
-    let colors = qr.to_colors();
+/// Scale `symbol`, plus its quiet zone, to a pixel bitmap — one crisp block of
+/// pixels per module. The module size is chosen from the longer side, so square
+/// and rectangular symbols both keep square modules.
+fn module_bitmap(symbol: &Symbol, border: u32) -> Bitmap {
+    let src_w = symbol.width();
+    let src_h = symbol.height();
     let b = border as usize;
-    let side = src + 2 * b;
-    let module_px = (TARGET_PX / side).clamp(MIN_MODULE_PX, MAX_MODULE_PX);
-    let image_px = side * module_px;
+    let side_w = src_w + 2 * b;
+    let side_h = src_h + 2 * b;
+    let module_px = (TARGET_PX / side_w.max(side_h)).clamp(MIN_MODULE_PX, MAX_MODULE_PX);
+    let width_px = side_w * module_px;
+    let height_px = side_h * module_px;
 
-    let mut dark = vec![false; image_px * image_px];
-    for y in 0..image_px {
+    let mut dark = vec![false; width_px * height_px];
+    for y in 0..height_px {
         let module_y = y / module_px;
-        for x in 0..image_px {
+        for x in 0..width_px {
             let module_x = x / module_px;
-            dark[y * image_px + x] = module_x >= b
-                && module_x < b + src
+            dark[y * width_px + x] = module_x >= b
+                && module_x < b + src_w
                 && module_y >= b
-                && module_y < b + src
-                && matches!(colors[(module_y - b) * src + (module_x - b)], Color::Dark);
+                && module_y < b + src_h
+                && symbol.is_dark(module_x - b, module_y - b);
         }
     }
-    Bitmap { image_px, dark }
+    Bitmap {
+        width_px,
+        height_px,
+        dark,
+    }
 }
 
-/// Render `qr` as a black-and-white bitmap through the Kitty graphics protocol
-/// (FR-3.12).
+/// Render `symbol` as a black-and-white bitmap through the Kitty graphics
+/// protocol (FR-3.12).
 ///
-/// A square RGB image is scaled so every module is a crisp block of pixels, with
-/// the quiet zone drawn in the light colour. `invert` swaps the two colours.
+/// An RGB image is scaled so every module is a crisp block of pixels, with the
+/// quiet zone drawn in the light colour. `invert` swaps the two colours.
 ///
 /// `id` is the protocol image id. Each transmission must use a fresh id: with
 /// `a=T` the terminal replaces any image already stored under the same id and
 /// drops its placements, so reusing one id would erase earlier codes instead of
 /// showing them side by side.
 pub fn render_kitty(
-    qr: &QrCode,
+    symbol: &Symbol,
     border: u32,
     invert: bool,
     id: u32,
     out: &mut dyn Write,
 ) -> io::Result<()> {
-    let bitmap = module_bitmap(qr, border);
+    let bitmap = module_bitmap(symbol, border);
 
     // Default: dark modules are black on a white field (FR-3.8); `invert` swaps
     // the two colours (FR-3.9).
@@ -288,20 +291,25 @@ pub fn render_kitty(
         rgb.extend_from_slice(&colour);
     }
 
-    crate::kitty::transmit_rgb(&rgb, bitmap.image_px, bitmap.image_px, id, out)?;
+    crate::kitty::transmit_rgb(&rgb, bitmap.width_px, bitmap.height_px, id, out)?;
     out.write_all(b"\n")
 }
 
-/// Render `qr` as a black-and-white bitmap through the Sixel graphics protocol
-/// (FR-3.13).
+/// Render `symbol` as a black-and-white bitmap through the Sixel graphics
+/// protocol (FR-3.13).
 ///
 /// Works like [`render_kitty`] — each module is a crisp block of pixels on a light
 /// quiet zone — but emits a Sixel sequence instead of a Kitty one, and needs no
 /// image id: Sixel draws at the cursor the moment the sequence is written.
 /// `invert` swaps the two colours (FR-3.9).
-pub fn render_sixel(qr: &QrCode, border: u32, invert: bool, out: &mut dyn Write) -> io::Result<()> {
-    let bitmap = module_bitmap(qr, border);
-    crate::sixel::encode(&bitmap.dark, bitmap.image_px, bitmap.image_px, invert, out)?;
+pub fn render_sixel(
+    symbol: &Symbol,
+    border: u32,
+    invert: bool,
+    out: &mut dyn Write,
+) -> io::Result<()> {
+    let bitmap = module_bitmap(symbol, border);
+    crate::sixel::encode(&bitmap.dark, bitmap.width_px, bitmap.height_px, invert, out)?;
     out.write_all(b"\n")
 }
 
@@ -322,15 +330,21 @@ mod tests {
         Frame::new(2, 2, vec![true, false, false, true])
     }
 
+    /// An all-light square symbol (`size` x `size` modules), enough to exercise
+    /// bitmap geometry without depending on a specific symbology.
+    fn blank_symbol(size: usize) -> Symbol {
+        Symbol::new(size, size, vec![false; size * size])
+    }
+
     #[test]
     fn kitty_bitmap_is_square_with_light_quiet_zone() {
-        let qr = QrCode::new(b"hello").unwrap();
-        let side = qr.width() + 2 * 4;
+        let symbol = blank_symbol(21);
+        let side = symbol.width() + 2 * 4;
         let module_px = (TARGET_PX / side).clamp(MIN_MODULE_PX, MAX_MODULE_PX);
         let image_px = side * module_px;
 
         let mut out = Vec::new();
-        render_kitty(&qr, 4, false, 424_242, &mut out).unwrap();
+        render_kitty(&symbol, 4, false, 424_242, &mut out).unwrap();
         let text = String::from_utf8(out).unwrap();
         assert!(text.starts_with("\x1b_G"), "missing APC introducer");
         // The image spans many chunks, so the first chunk carries the full control
@@ -348,9 +362,9 @@ mod tests {
 
     #[test]
     fn kitty_invert_swaps_the_quiet_zone_pixel() {
-        let qr = QrCode::new(b"hello").unwrap();
+        let symbol = blank_symbol(21);
         let mut out = Vec::new();
-        render_kitty(&qr, 4, true, 7, &mut out).unwrap();
+        render_kitty(&symbol, 4, true, 7, &mut out).unwrap();
         let text = String::from_utf8(out).unwrap();
         // Inverted: the light quiet zone becomes black.
         assert!(
@@ -361,13 +375,13 @@ mod tests {
 
     #[test]
     fn sixel_bitmap_declares_a_square_raster_and_light_quiet_zone() {
-        let qr = QrCode::new(b"hello").unwrap();
-        let side = qr.width() + 2 * 4;
+        let symbol = blank_symbol(21);
+        let side = symbol.width() + 2 * 4;
         let module_px = (TARGET_PX / side).clamp(MIN_MODULE_PX, MAX_MODULE_PX);
         let image_px = side * module_px;
 
         let mut out = Vec::new();
-        render_sixel(&qr, 4, false, &mut out).unwrap();
+        render_sixel(&symbol, 4, false, &mut out).unwrap();
         let text = String::from_utf8(out).unwrap();
         assert!(text.starts_with("\x1bPq"), "missing DCS introducer");
         assert!(text.ends_with("\x1b\\\n"), "missing string terminator");
@@ -381,9 +395,9 @@ mod tests {
 
     #[test]
     fn sixel_invert_swaps_the_quiet_zone_colour() {
-        let qr = QrCode::new(b"hello").unwrap();
+        let symbol = blank_symbol(21);
         let mut out = Vec::new();
-        render_sixel(&qr, 4, true, &mut out).unwrap();
+        render_sixel(&symbol, 4, true, &mut out).unwrap();
         let text = String::from_utf8(out).unwrap();
         assert!(text.contains("#0;2;0;0;0#1;2;100;100;100"), "{text:?}");
     }

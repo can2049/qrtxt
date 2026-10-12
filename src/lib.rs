@@ -16,6 +16,11 @@
 //! `sixel` are pure, and `input` only reads the payload source. All argument
 //! parsing and all process-level side effects (stdin/stdout locking, the TTY
 //! probe, writing output) live in [`cli::run`] / [`cli::run_with`].
+//!
+//! Encoding hands rendering a symbology-agnostic [`types::Symbol`] (a dark/light
+//! module grid) rather than a concrete barcode type, so only `encode` depends on
+//! a barcode library and a new symbology is added there without touching
+//! rendering.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

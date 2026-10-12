@@ -3,10 +3,10 @@
 use qrcode::bits::Bits;
 use qrcode::optimize::{Parser, Segment};
 use qrcode::types::{Mode, QrError};
-use qrcode::{EcLevel, QrCode, Version};
+use qrcode::{Color, EcLevel, QrCode, Version};
 
 use crate::error::AppError;
-use crate::types::Ec;
+use crate::types::{Ec, Symbol};
 
 /// ECI designator for UTF-8 (ISO/IEC 18004 assignment 26).
 const UTF8_ECI: u32 = 26;
@@ -91,21 +91,37 @@ fn fits(data: &[u8], ec: Ec) -> bool {
     build(data, ec).is_ok()
 }
 
+/// Convert a built QR code into the neutral [`Symbol`] grid (FR-2.4).
+///
+/// The rest of the crate (rendering in particular) consumes only `Symbol`, so it
+/// stays independent of the `qrcode` crate.
+fn to_symbol(qr: &QrCode) -> Symbol {
+    let width = qr.width();
+    let dark = qr
+        .to_colors()
+        .iter()
+        .map(|color| matches!(color, Color::Dark))
+        .collect();
+    Symbol::new(width, width, dark)
+}
+
 /// Encode `data` into an ordinary QR code at the exact error level.
 ///
 /// `qrcode` never boosts the error level, matching qrpipe's `boost_error=false`.
-pub fn encode(data: &[u8], ec: Ec) -> Result<QrCode, AppError> {
-    build(data, ec).map_err(|error| match error {
-        QrError::DataTooLong => {
-            let max = max_prefix_fitting(data, ec);
-            AppError::Input(format!(
-                "input too long: {} bytes (maximum {} bytes at error-correction level {ec:?})",
-                data.len(),
-                max
-            ))
-        }
-        _ => AppError::Input("input cannot be encoded as a QR code".to_string()),
-    })
+pub fn encode(data: &[u8], ec: Ec) -> Result<Symbol, AppError> {
+    build(data, ec)
+        .map(|qr| to_symbol(&qr))
+        .map_err(|error| match error {
+            QrError::DataTooLong => {
+                let max = max_prefix_fitting(data, ec);
+                AppError::Input(format!(
+                    "input too long: {} bytes (maximum {} bytes at error-correction level {ec:?})",
+                    data.len(),
+                    max
+                ))
+            }
+            _ => AppError::Input("input cannot be encoded as a QR code".to_string()),
+        })
 }
 
 /// Encode `data`, splitting it across as many QR codes as needed.
@@ -123,7 +139,7 @@ pub fn encode_multi(
     ec: Ec,
     max_bytes: Option<usize>,
     min_chunks: Option<usize>,
-) -> Result<Vec<QrCode>, AppError> {
+) -> Result<Vec<Symbol>, AppError> {
     split_chunks(data, ec, max_bytes, min_chunks)
         .into_iter()
         .map(|chunk| encode(chunk, ec))
@@ -254,7 +270,7 @@ mod tests {
     #[test]
     fn encodes_with_exact_error_level() {
         for ec in [Ec::L, Ec::M, Ec::Q, Ec::H] {
-            let qr = encode(b"hello", ec).unwrap();
+            let qr = build(b"hello", ec).unwrap();
             assert_eq!(qr.error_correction_level(), ec_level(ec));
         }
     }
@@ -521,7 +537,7 @@ mod tests {
         // Confirms the UTF-8 ECI / byte-mode path is actually taken for CJK: the
         // symbol must not equal a plain (Kanji-prone) encoding of the same bytes.
         for sample in CJK_SAMPLES {
-            let ours = encode(sample.as_bytes(), Ec::M).unwrap();
+            let ours = build(sample.as_bytes(), Ec::M).unwrap();
             let plain =
                 QrCode::with_error_correction_level(sample.as_bytes(), ec_level(Ec::M)).unwrap();
             assert_ne!(ours.to_colors(), plain.to_colors(), "{sample:?}");
@@ -562,7 +578,7 @@ mod tests {
     fn ascii_encoding_matches_the_plain_encoder() {
         // No ECI is inserted, so the symbol is byte-for-byte the crate's own.
         let data = b"plain ascii payload";
-        let ours = encode(data, Ec::M).unwrap();
+        let ours = build(data, Ec::M).unwrap();
         let plain = QrCode::with_error_correction_level(data, ec_level(Ec::M)).unwrap();
         assert_eq!(ours.to_colors(), plain.to_colors());
     }
@@ -572,7 +588,7 @@ mod tests {
         // The UTF-8 ECI changes the bit stream, so the matrix differs from a
         // plain encoding of the same bytes.
         let data = "参数".as_bytes();
-        let ours = encode(data, Ec::M).unwrap();
+        let ours = build(data, Ec::M).unwrap();
         let plain = QrCode::with_error_correction_level(data, ec_level(Ec::M)).unwrap();
         assert_ne!(
             ours.to_colors(),
@@ -584,7 +600,7 @@ mod tests {
     #[test]
     fn non_ascii_uses_the_smallest_version_that_fits() {
         let data = "中文内容".as_bytes();
-        let ours = encode(data, Ec::L).unwrap();
+        let ours = build(data, Ec::L).unwrap();
         let plain = QrCode::with_error_correction_level(data, ec_level(Ec::L)).unwrap();
         // The ECI adds 12 bits, so the version can be equal or one larger.
         assert!(

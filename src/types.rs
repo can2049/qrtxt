@@ -116,6 +116,58 @@ impl FromStr for Mode {
     }
 }
 
+/// A decoded 2D symbol as a grid of dark/light modules (FR-2.4).
+///
+/// This is the neutral currency between encoding and rendering: an encoder turns
+/// a payload into a [`Symbol`], and every renderer draws a [`Symbol`] without
+/// knowing which symbology (QR, Data Matrix, ...) produced it. `true` marks a
+/// dark module, matching the symbologies' own convention (a light module is
+/// background).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Symbol {
+    width: usize,
+    height: usize,
+    dark: Vec<bool>,
+}
+
+impl Symbol {
+    /// Build a symbol from a row-major `dark` grid of `width` x `height` modules.
+    ///
+    /// # Panics
+    /// Panics if `dark.len() != width * height`.
+    #[must_use]
+    pub fn new(width: usize, height: usize, dark: Vec<bool>) -> Self {
+        assert_eq!(
+            dark.len(),
+            width * height,
+            "dark length must equal width * height"
+        );
+        Symbol {
+            width,
+            height,
+            dark,
+        }
+    }
+
+    /// Symbol width, in modules.
+    #[must_use]
+    pub fn width(&self) -> usize {
+        self.width
+    }
+
+    /// Symbol height, in modules.
+    #[must_use]
+    pub fn height(&self) -> usize {
+        self.height
+    }
+
+    /// Whether the module at column `x`, row `y` is dark.
+    #[must_use]
+    pub fn is_dark(&self, x: usize, y: usize) -> bool {
+        self.dark[y * self.width + x]
+    }
+}
+
 /// Where the payload is read from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InputSpec {
