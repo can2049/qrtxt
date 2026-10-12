@@ -95,7 +95,7 @@ Payload:
 
 Encoding:
   -e, --error-correction <LEVEL>  Error-correction level: L (about 7% recoverable), M (15%), Q (25%), or H (30%) [default: L]
-  -F, --format <FORMAT>           Barcode format: qr or datamatrix [default: qr]
+  -F, --format <FORMAT>           Barcode format: qr or datamatrix (dm) [default: qr]
   -m, --max-bytes <BYTES>         Cap the payload of each symbol at BYTES bytes; implies splitting (default: the symbol's own limit)
   -c, --chunk <COUNT>             Split the payload across at least COUNT symbols; advisory (default: no minimum)
 

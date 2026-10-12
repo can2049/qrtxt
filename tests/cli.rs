@@ -242,6 +242,12 @@ fn short_help_lists_the_mode_option_and_its_values() {
 }
 
 #[test]
+fn short_help_documents_the_format_alias() {
+    let help = stdout(&["-h"]);
+    assert!(help.contains("datamatrix (dm)"), "{help}");
+}
+
+#[test]
 fn datamatrix_format_prints_a_symbol() {
     let output = stdout(&["--format", "datamatrix", "hello"]);
     assert!(output.chars().any(is_block), "no block glyphs in output");

@@ -87,7 +87,7 @@ qrtxt [OPTIONS] [DATA]
 
 编码:
   -e, --error-correction <LEVEL>  纠错等级: L(约可恢复 7%)、M(15%)、Q(25%)、H(30%),仅 QR 有效 [默认: L]
-  -F, --format <FORMAT>           条码格式: qr 或 datamatrix [默认: qr]
+  -F, --format <FORMAT>           条码格式: qr 或 datamatrix (dm) [默认: qr]
   -m, --max-bytes <BYTES>         限制每个符号的负载为 BYTES 字节;会触发拆分(默认: 单个符号自身的上限)
   -c, --chunk <COUNT>             把负载拆分成至少 COUNT 个符号;引导性(默认: 无下限)
 
