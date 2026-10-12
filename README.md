@@ -258,7 +258,7 @@ on every terminal, so check that a printed code still scans.
 
 One QR symbol holds a bounded amount of data (about 2953 bytes at level `L`, less
 at higher levels). When the payload does not fit, `qrtxt` splits it across several
-codes automatically — no flag needed — printing them in order under a `QR i/N`
+codes automatically — no flag needed — printing them in order under a `QR Code i/N`
 caption. The chunks are balanced, so every code carries a comparable amount of
 data, and cuts fall on character boundaries, so multi-byte characters are never
 broken between codes. A payload that fits one symbol is printed as a single,

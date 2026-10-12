@@ -29,7 +29,7 @@ By default the best rendering the terminal offers is used: a crisp bitmap over t
 Sixel graphics protocol where supported, otherwise Unicode block characters, so a plain UTF-8 \
 terminal always works. Use --mode to force a specific renderer.\n\n\
 A payload too large for a single symbol is split automatically across several balanced \
-symbols, printed in order under a `QR i/N` (or `DM i/N`) caption. Use --max-bytes to cap the \
+symbols, printed in order under a `QR Code i/N` (or `Data Matrix i/N`) caption. Use --max-bytes to cap the \
 bytes per symbol, or --chunk to require a minimum number of symbols.",
     after_help = "Source: https://github.com/can2049/qrtxt"
 )]
@@ -281,11 +281,12 @@ pub fn run(
 /// a repeated id, so sharing one id would leave only the last code visible.
 const KITTY_IMAGE_ID_BASE: u32 = 424_242;
 
-/// Caption prefix for a multi-symbol run, matching the chosen format.
+/// Caption prefix for a multi-symbol run: the symbology's full name, so the label
+/// reads unambiguously (`QR Code 1/3`, `Data Matrix 1/3`).
 fn format_label(format: Format) -> &'static str {
     match format {
-        Format::Qr => "QR",
-        Format::DataMatrix => "DM",
+        Format::Qr => "QR Code",
+        Format::DataMatrix => "Data Matrix",
     }
 }
 
@@ -456,8 +457,11 @@ mod tests {
         let mut out = Vec::new();
         render_all(&cfg, &codes, &mut out).unwrap();
         let text = String::from_utf8(out).unwrap();
-        assert!(text.contains("QR 1/"), "{text}");
-        assert!(text.contains(&format!("QR {0}/{0}", codes.len())), "{text}");
+        assert!(text.contains("QR Code 1/"), "{text}");
+        assert!(
+            text.contains(&format!("QR Code {0}/{0}", codes.len())),
+            "{text}"
+        );
     }
 
     #[test]
@@ -475,7 +479,7 @@ mod tests {
         let mut out = Vec::new();
         render_all(&cfg, &codes, &mut out).unwrap();
         let text = String::from_utf8(out).unwrap();
-        assert!(!text.contains("QR "), "{text}");
+        assert!(!text.contains("QR Code "), "{text}");
     }
 
     #[test]
@@ -678,8 +682,8 @@ mod tests {
         let mut out = Vec::new();
         render_all(&cfg, &codes, &mut out).unwrap();
         let text = String::from_utf8(out).unwrap();
-        assert!(text.contains("DM 1/"), "{text}");
-        assert!(!text.contains("QR "), "{text}");
+        assert!(text.contains("Data Matrix 1/"), "{text}");
+        assert!(!text.contains("QR Code "), "{text}");
     }
 
     #[test]

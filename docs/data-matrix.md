@@ -79,7 +79,7 @@ trait Codec {
 - 新开关 `-F/--format qr|datamatrix`(`dm` 简写),新增 `types::Format`。
 - `--mode` 仍是**渲染**选择器;`--format` 是**符号**选择器,二者互不影响,五种渲染模式都对
   DM 生效。
-- 多符号标题按格式取 `QR i/N` / `DM i/N`(`cli::format_label`)。
+- 多符号标题按格式取 `QR Code i/N` / `Data Matrix i/N`(`cli::format_label`)。
 
 ---
 
@@ -107,7 +107,7 @@ trait Codec {
   - `datamatrix_split_round_trips_in_order`:大负载分片后逐块解码、按序拼接还原。
   - `datamatrix_inverted_round_trips`:反相可扫。
 - **单测**:`encode` 侧方形校验 / 非 ASCII 可编码 / 超限报错 / 分片覆盖。
-- **行为**:`tests/cli.rs` 覆盖 `-F dm` 与 `--format datamatrix` 等价、多码 `DM i/N` 标题、
+- **行为**:`tests/cli.rs` 覆盖 `-F dm` 与 `--format datamatrix` 等价、多码 `Data Matrix i/N` 标题、
   未知格式退出码 2、`-h` 广告 `dm` 简写。
 
 ---
