@@ -501,7 +501,7 @@ fn parse_kitty(buf: &[u8], side: usize, invert: bool) -> Vec<bool> {
 
 #[test]
 fn kitty_bitmap_round_trips() {
-    use qrtxt::types::Ec;
+    use qrtxt::types::{Ec, Format};
 
     let cases: &[(&str, bool)] = &[
         ("hello", false),
@@ -510,7 +510,8 @@ fn kitty_bitmap_round_trips() {
         ("hello", true),
     ];
     for &(payload, invert) in cases {
-        let codes = qrtxt::encode::encode_multi(payload.as_bytes(), Ec::L, None, None).unwrap();
+        let codes =
+            qrtxt::encode::encode_multi(payload.as_bytes(), Format::Qr, Ec::L, None, None).unwrap();
         assert_eq!(codes.len(), 1, "payload should fit one symbol");
         let qr = &codes[0];
 
@@ -527,14 +528,15 @@ fn kitty_bitmap_round_trips() {
 
 #[test]
 fn kitty_multi_code_round_trips() {
-    use qrtxt::types::Ec;
+    use qrtxt::types::{Ec, Format};
 
     // A payload split across several codes: each must render as its own
     // decodable bitmap holding that code's (distinct) segment. Regression: when
     // the codes shared one image id the terminal dropped every bitmap but the
     // last, so earlier codes appeared unrendered.
     let payload: String = (0..600).map(|i| (b'a' + (i % 26) as u8) as char).collect();
-    let codes = qrtxt::encode::encode_multi(payload.as_bytes(), Ec::L, None, Some(3)).unwrap();
+    let codes =
+        qrtxt::encode::encode_multi(payload.as_bytes(), Format::Qr, Ec::L, None, Some(3)).unwrap();
     assert!(codes.len() > 1, "payload should split into several codes");
 
     let mut assembled = String::new();
@@ -699,7 +701,7 @@ fn parse_sixel(buf: &[u8], side: usize, invert: bool) -> Vec<bool> {
 
 #[test]
 fn sixel_bitmap_round_trips() {
-    use qrtxt::types::Ec;
+    use qrtxt::types::{Ec, Format};
 
     let cases: &[(&str, bool)] = &[
         ("hello", false),
@@ -708,7 +710,8 @@ fn sixel_bitmap_round_trips() {
         ("hello", true),
     ];
     for &(payload, invert) in cases {
-        let codes = qrtxt::encode::encode_multi(payload.as_bytes(), Ec::L, None, None).unwrap();
+        let codes =
+            qrtxt::encode::encode_multi(payload.as_bytes(), Format::Qr, Ec::L, None, None).unwrap();
         assert_eq!(codes.len(), 1, "payload should fit one symbol");
         let qr = &codes[0];
 
@@ -725,12 +728,13 @@ fn sixel_bitmap_round_trips() {
 
 #[test]
 fn sixel_multi_code_round_trips() {
-    use qrtxt::types::Ec;
+    use qrtxt::types::{Ec, Format};
 
     // A payload split across several codes: each Sixel sequence must hold that
     // code's segment and, in order, reproduce the whole payload.
     let payload: String = (0..600).map(|i| (b'a' + (i % 26) as u8) as char).collect();
-    let codes = qrtxt::encode::encode_multi(payload.as_bytes(), Ec::L, None, Some(3)).unwrap();
+    let codes =
+        qrtxt::encode::encode_multi(payload.as_bytes(), Format::Qr, Ec::L, None, Some(3)).unwrap();
     assert!(codes.len() > 1, "payload should split into several codes");
 
     let mut assembled = String::new();
@@ -745,4 +749,106 @@ fn sixel_multi_code_round_trips() {
         assembled.push_str(&part);
     }
     assert_eq!(assembled, payload, "codes did not reassemble in order");
+}
+
+/// Parse a Data Matrix rendered by the CLI into its symbol's dark grid.
+///
+/// A Data Matrix square symbol is even-sized, so the symbol size is the parsed
+/// width with the quiet zone removed (and rounded down to even, undoing any
+/// glyph-tile padding).
+fn datamatrix_dark_grid(payload: &str, glyph: &str, invert: bool) -> (usize, Vec<bool>) {
+    let mut args = vec!["--format", "datamatrix", "--glyphs", glyph];
+    if invert {
+        args.push("--invert");
+    }
+    args.push(payload);
+    let (width, _height, ink) = parse(&render(&args), glyph);
+    datamatrix_crop(&ink, width, invert)
+}
+
+/// Crop the square Data Matrix symbol out of a parsed ink grid to a dark grid.
+fn datamatrix_crop(ink: &[bool], width: usize, invert: bool) -> (usize, Vec<bool>) {
+    let size = (width - 2 * DEFAULT_BORDER) & !1;
+    let mut dark = vec![false; size * size];
+    for y in 0..size {
+        for x in 0..size {
+            let cell = ink[(y + DEFAULT_BORDER) * width + (x + DEFAULT_BORDER)];
+            dark[y * size + x] = if invert { cell } else { !cell };
+        }
+    }
+    (size, dark)
+}
+
+#[test]
+fn datamatrix_ascii_round_trips() {
+    // The crate decoder surfaces raw bytes only when there is no ECI, so ASCII
+    // payloads go through a full render -> parse -> decode round trip.
+    for payload in ["hello", "https://example.com/abc", "0123456789 ABCD xyz"] {
+        for glyph in ["half", "quadrant", "braille"] {
+            let (size, dark) = datamatrix_dark_grid(payload, glyph, false);
+            let decoded = datamatrix::DataMatrix::decode(&dark, size).expect("decodes");
+            assert_eq!(
+                decoded,
+                payload.as_bytes(),
+                "glyph={glyph} payload={payload:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn datamatrix_inverted_round_trips() {
+    let (size, dark) = datamatrix_dark_grid("hello", "half", true);
+    let decoded = datamatrix::DataMatrix::decode(&dark, size).expect("decodes");
+    assert_eq!(decoded, b"hello");
+}
+
+#[test]
+fn datamatrix_grid_matches_the_encoder() {
+    use qrtxt::types::{Ec, Format};
+
+    // The crate decoder refuses ECI-tagged symbols as raw bytes, so UTF-8 is
+    // verified by reproducing the encoder's own symbol through the CLI and
+    // renderer: the printed dark grid must equal the encoded symbol exactly.
+    for payload in ["hello", "你好，世界", "混合 mixed 123 😀"] {
+        for (glyph, invert) in [("half", false), ("quadrant", false), ("braille", true)] {
+            let (size, dark) = datamatrix_dark_grid(payload, glyph, invert);
+            let symbols = qrtxt::encode::encode_multi(
+                payload.as_bytes(),
+                Format::DataMatrix,
+                Ec::L,
+                None,
+                None,
+            )
+            .unwrap();
+            assert_eq!(symbols.len(), 1, "payload should fit one symbol");
+            let symbol = &symbols[0];
+            assert_eq!(symbol.width(), size, "payload={payload:?}");
+            for y in 0..size {
+                for x in 0..size {
+                    assert_eq!(
+                        dark[y * size + x],
+                        symbol.is_dark(x, y),
+                        "payload={payload:?} glyph={glyph} invert={invert} at ({x},{y})"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn datamatrix_split_round_trips_in_order() {
+    let payload = "a".repeat(4000);
+    let text = render(&["--format", "datamatrix", "-e", "L", &payload]);
+    let blocks = multi_blocks(&text);
+    assert!(blocks.len() > 1, "expected the payload to split");
+    let mut assembled = String::new();
+    for block in &blocks {
+        let (width, _height, ink) = parse(block, "half");
+        let (size, dark) = datamatrix_crop(&ink, width, false);
+        let part = datamatrix::DataMatrix::decode(&dark, size).expect("decodes");
+        assembled.push_str(std::str::from_utf8(&part).expect("ascii"));
+    }
+    assert_eq!(assembled, payload);
 }
