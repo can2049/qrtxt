@@ -116,6 +116,31 @@ impl FromStr for Mode {
     }
 }
 
+/// The barcode symbology to draw (FR-2.7).
+///
+/// Selected independently of [`Mode`]: `--mode` picks how a symbol is rendered,
+/// `--format` picks which symbol is produced.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Format {
+    /// An ordinary QR code (the default).
+    Qr,
+    /// A Data Matrix (ECC 200) symbol.
+    DataMatrix,
+}
+
+impl FromStr for Format {
+    type Err = String;
+
+    /// Parses a case-insensitive format name (`"qr"`, `"datamatrix"`, `"dm"`).
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "qr" => Ok(Format::Qr),
+            "datamatrix" | "dm" => Ok(Format::DataMatrix),
+            _ => Err(format!("invalid format: {s} (expected qr|datamatrix)")),
+        }
+    }
+}
+
 /// A decoded 2D symbol as a grid of dark/light modules (FR-2.4).
 ///
 /// This is the neutral currency between encoding and rendering: an encoder turns
@@ -186,6 +211,8 @@ pub struct Config {
     pub input: InputSpec,
     /// Requested error-correction level.
     pub ec: Ec,
+    /// Barcode symbology to draw.
+    pub format: Format,
     /// Quiet-zone width, in modules.
     pub border: u32,
     /// Invert the ink mapping, for light-background terminals.
@@ -241,5 +268,18 @@ mod tests {
     fn mode_rejects_unknown() {
         assert!("blocks".parse::<Mode>().is_err());
         assert!("".parse::<Mode>().is_err());
+    }
+
+    #[test]
+    fn format_parses_case_insensitively() {
+        assert_eq!("qr".parse::<Format>(), Ok(Format::Qr));
+        assert_eq!("DataMatrix".parse::<Format>(), Ok(Format::DataMatrix));
+        assert_eq!("DM".parse::<Format>(), Ok(Format::DataMatrix));
+    }
+
+    #[test]
+    fn format_rejects_unknown() {
+        assert!("pdf417".parse::<Format>().is_err());
+        assert!("".parse::<Format>().is_err());
     }
 }

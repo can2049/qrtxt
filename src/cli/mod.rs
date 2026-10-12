@@ -9,7 +9,7 @@ use std::io::{IsTerminal, Write};
 use clap::Parser;
 
 use crate::error::AppError;
-use crate::types::{Config, Ec, GlyphSet, InputSpec, Mode, RenderMode, Symbol};
+use crate::types::{Config, Ec, Format, GlyphSet, InputSpec, Mode, RenderMode, Symbol};
 
 mod help;
 mod probe;
@@ -21,15 +21,16 @@ pub use help::{add_mode_hint, mode_support_hint};
 #[command(
     name = "qrtxt",
     version,
-    about = "Turn text into a terminal QR code",
-    long_about = "Turn text into a terminal QR code.\n\n\
+    about = "Turn text into a terminal QR code or Data Matrix",
+    long_about = "Turn text into a terminal QR code or Data Matrix.\n\n\
 Reads a payload from a literal argument, a file, or standard input and prints it as one or \
-more QR codes. By default it picks the best rendering the terminal offers: a crisp bitmap \
-over the Kitty or Sixel graphics protocol where supported, otherwise Unicode block \
-characters, so a plain UTF-8 terminal always works. Use --mode to force a specific renderer.\n\n\
-A payload too large for a single symbol is split automatically across several balanced codes, \
-printed in order under a `QR i/N` caption. Use --max-bytes to cap the bytes per code, or \
---chunk to require a minimum number of codes.",
+more symbols. --format chooses a QR code (the default) or a Data Matrix (ECC 200) symbol. \
+By default the best rendering the terminal offers is used: a crisp bitmap over the Kitty or \
+Sixel graphics protocol where supported, otherwise Unicode block characters, so a plain UTF-8 \
+terminal always works. Use --mode to force a specific renderer.\n\n\
+A payload too large for a single symbol is split automatically across several balanced \
+symbols, printed in order under a `QR i/N` (or `DM i/N`) caption. Use --max-bytes to cap the \
+bytes per symbol, or --chunk to require a minimum number of symbols.",
     after_help = "Source: https://github.com/can2049/qrtxt"
 )]
 pub struct Cli {
@@ -39,6 +40,22 @@ pub struct Cli {
     /// payload is read from --file, or from standard input when no file is given.
     #[arg(value_name = "DATA", help_heading = "Payload")]
     pub data: Option<String>,
+
+    /// Barcode format to draw: qr or datamatrix.
+    ///
+    /// `qr` (the default) draws a QR code. `datamatrix` draws a Data Matrix
+    /// (ECC 200) symbol, which is always square. Data Matrix error correction is
+    /// fixed by the symbol size, so --error-correction does not apply to it; and a
+    /// Data Matrix holds far less data per symbol, so a large payload splits into
+    /// more codes.
+    #[arg(
+        short = 'F',
+        long = "format",
+        value_name = "FORMAT",
+        default_value = "qr",
+        help_heading = "Encoding"
+    )]
+    pub format: Format,
 
     /// Error-correction level: L (about 7% recoverable), M (15%), Q (25%), or H
     /// (30%).
@@ -55,13 +72,13 @@ pub struct Cli {
     )]
     pub error: Ec,
 
-    /// Cap the payload of each QR code at BYTES bytes; implies splitting (default:
+    /// Cap the payload of each symbol at BYTES bytes; implies splitting (default:
     /// the symbol's own limit).
     ///
-    /// Even a payload that fits one symbol is split so that no code exceeds BYTES
-    /// bytes, keeping the codes as evenly sized as possible. A value larger than a
-    /// symbol can hold is clamped down to the symbol's own limit. The value must be
-    /// at least 1.
+    /// Even a payload that fits one symbol is split so that no symbol exceeds
+    /// BYTES bytes, keeping the symbols as evenly sized as possible. A value
+    /// larger than a symbol can hold is clamped down to the symbol's own limit.
+    /// The value must be at least 1.
     #[arg(
         short = 'm',
         long = "max-bytes",
@@ -71,13 +88,13 @@ pub struct Cli {
     )]
     pub max_bytes: Option<u32>,
 
-    /// Split the payload across at least COUNT QR codes; advisory (default: no
+    /// Split the payload across at least COUNT symbols; advisory (default: no
     /// minimum).
     ///
-    /// The payload is divided into COUNT balanced codes when the content allows,
-    /// otherwise into as many codes as possible (at most one per character). Can be
-    /// combined with --max-bytes; whichever forces more codes wins. The value must
-    /// be at least 1.
+    /// The payload is divided into COUNT balanced symbols when the content
+    /// allows, otherwise into as many symbols as possible (at most one per
+    /// character). Can be combined with --max-bytes; whichever forces more
+    /// symbols wins. The value must be at least 1.
     #[arg(
         short = 'c',
         long = "chunk",
@@ -175,6 +192,7 @@ impl Cli {
         Config {
             input,
             ec: self.error,
+            format: self.format,
             border: self.border,
             invert: self.invert,
             glyphs: self.glyphs,
@@ -244,7 +262,8 @@ pub fn run(
     stdin_is_tty: bool,
 ) -> Result<(), AppError> {
     let payload = crate::input::resolve(cfg, stdin, stdin_is_tty)?;
-    let codes = crate::encode::encode_multi(&payload, cfg.ec, cfg.max_bytes, cfg.min_chunks)?;
+    let codes =
+        crate::encode::encode_multi(&payload, cfg.format, cfg.ec, cfg.max_bytes, cfg.min_chunks)?;
 
     let mut writer = std::io::BufWriter::new(stdout);
     if let Err(error) = render_all(cfg, &codes, &mut writer) {
@@ -262,12 +281,21 @@ pub fn run(
 /// a repeated id, so sharing one id would leave only the last code visible.
 const KITTY_IMAGE_ID_BASE: u32 = 424_242;
 
+/// Caption prefix for a multi-symbol run, matching the chosen format.
+fn format_label(format: Format) -> &'static str {
+    match format {
+        Format::Qr => "QR",
+        Format::DataMatrix => "DM",
+    }
+}
+
 /// Draw every code; when there is more than one, caption each and separate them.
 fn render_all(cfg: &Config, codes: &[Symbol], out: &mut dyn std::io::Write) -> std::io::Result<()> {
     let total = codes.len();
+    let label = format_label(cfg.format);
     for (index, symbol) in codes.iter().enumerate() {
         if total > 1 {
-            writeln!(out, "QR {}/{}", index + 1, total)?;
+            writeln!(out, "{label} {}/{}", index + 1, total)?;
         }
         match cfg.mode {
             RenderMode::Kitty => {
@@ -416,9 +444,14 @@ mod tests {
     #[test]
     fn render_all_captions_multiple_codes() {
         let cfg = parse(&["-e", "L", "x"]).to_config();
-        let codes =
-            crate::encode::encode_multi(&vec![b'x'; 4000], cfg.ec, cfg.max_bytes, cfg.min_chunks)
-                .unwrap();
+        let codes = crate::encode::encode_multi(
+            &vec![b'x'; 4000],
+            cfg.format,
+            cfg.ec,
+            cfg.max_bytes,
+            cfg.min_chunks,
+        )
+        .unwrap();
         assert!(codes.len() > 1);
         let mut out = Vec::new();
         render_all(&cfg, &codes, &mut out).unwrap();
@@ -430,8 +463,14 @@ mod tests {
     #[test]
     fn render_all_leaves_a_single_code_uncaptioned() {
         let cfg = parse(&["x"]).to_config();
-        let codes =
-            crate::encode::encode_multi(b"hello", cfg.ec, cfg.max_bytes, cfg.min_chunks).unwrap();
+        let codes = crate::encode::encode_multi(
+            b"hello",
+            cfg.format,
+            cfg.ec,
+            cfg.max_bytes,
+            cfg.min_chunks,
+        )
+        .unwrap();
         assert_eq!(codes.len(), 1);
         let mut out = Vec::new();
         render_all(&cfg, &codes, &mut out).unwrap();
@@ -448,8 +487,14 @@ mod tests {
         let ansi = parse(&["--mode", "ansi", "hi"]).to_config();
         let braille = parse(&["--mode", "ansi", "-g", "braille", "hi"]).to_config();
         assert_eq!(braille.mode, RenderMode::Ansi);
-        let codes =
-            crate::encode::encode_multi(b"hi", ansi.ec, ansi.max_bytes, ansi.min_chunks).unwrap();
+        let codes = crate::encode::encode_multi(
+            b"hi",
+            ansi.format,
+            ansi.ec,
+            ansi.max_bytes,
+            ansi.min_chunks,
+        )
+        .unwrap();
         let draw = |cfg: &Config| {
             let mut out = Vec::new();
             render_all(cfg, &codes, &mut out).unwrap();
@@ -465,9 +510,14 @@ mod tests {
         // unrendered. Each code must now be transmitted as its own image with a
         // distinct id, in order.
         let cfg = parse(&["--mode", "kitty", "-e", "L", "x"]).to_config();
-        let codes =
-            crate::encode::encode_multi(&vec![b'x'; 6000], cfg.ec, cfg.max_bytes, cfg.min_chunks)
-                .unwrap();
+        let codes = crate::encode::encode_multi(
+            &vec![b'x'; 6000],
+            cfg.format,
+            cfg.ec,
+            cfg.max_bytes,
+            cfg.min_chunks,
+        )
+        .unwrap();
         assert!(codes.len() >= 3, "payload should split into several codes");
 
         let mut out = Vec::new();
@@ -596,11 +646,53 @@ mod tests {
     }
 
     #[test]
+    fn format_flag_selects_datamatrix() {
+        assert_eq!(
+            parse(&["--format", "datamatrix", "x"]).to_config().format,
+            Format::DataMatrix
+        );
+        assert_eq!(
+            parse(&["-F", "dm", "x"]).to_config().format,
+            Format::DataMatrix
+        );
+        assert_eq!(parse(&["x"]).to_config().format, Format::Qr);
+    }
+
+    #[test]
+    fn format_rejects_unknown_value() {
+        assert!(Cli::try_parse_from(["qrtxt", "--format", "pdf417", "x"]).is_err());
+    }
+
+    #[test]
+    fn render_all_labels_datamatrix_captions() {
+        let cfg = parse(&["--format", "datamatrix", "-e", "L", "x"]).to_config();
+        let codes = crate::encode::encode_multi(
+            &vec![b'x'; 4000],
+            cfg.format,
+            cfg.ec,
+            cfg.max_bytes,
+            cfg.min_chunks,
+        )
+        .unwrap();
+        assert!(codes.len() > 1, "expected a split");
+        let mut out = Vec::new();
+        render_all(&cfg, &codes, &mut out).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("DM 1/"), "{text}");
+        assert!(!text.contains("QR "), "{text}");
+    }
+
+    #[test]
     fn render_all_sixel_renders_one_sequence_per_code() {
         let cfg = parse(&["--mode", "sixel", "-e", "L", "x"]).to_config();
-        let codes =
-            crate::encode::encode_multi(&vec![b'x'; 6000], cfg.ec, cfg.max_bytes, cfg.min_chunks)
-                .unwrap();
+        let codes = crate::encode::encode_multi(
+            &vec![b'x'; 6000],
+            cfg.format,
+            cfg.ec,
+            cfg.max_bytes,
+            cfg.min_chunks,
+        )
+        .unwrap();
         assert!(codes.len() >= 3, "payload should split into several codes");
 
         let mut out = Vec::new();

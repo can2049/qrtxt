@@ -1,12 +1,17 @@
-//! QR encoding, wrapping the `qrcode` crate (FR-2.*).
+//! Symbol encoding, wrapping a barcode crate per symbology (FR-2.*).
+//!
+//! QR codes come from the `qrcode` crate and Data Matrix (ECC 200) codes from
+//! the `datamatrix` crate; both are converted to the neutral [`Symbol`] grid so
+//! nothing downstream depends on either library.
 
+use datamatrix::{DataMatrix, SymbolList};
 use qrcode::bits::Bits;
 use qrcode::optimize::{Parser, Segment};
 use qrcode::types::{Mode, QrError};
 use qrcode::{Color, EcLevel, QrCode, Version};
 
 use crate::error::AppError;
-use crate::types::{Ec, Symbol};
+use crate::types::{Ec, Format, Symbol};
 
 /// ECI designator for UTF-8 (ISO/IEC 18004 assignment 26).
 const UTF8_ECI: u32 = 26;
@@ -105,56 +110,151 @@ fn to_symbol(qr: &QrCode) -> Symbol {
     Symbol::new(width, width, dark)
 }
 
+/// A barcode symbology: bytes in, one [`Symbol`] out, plus its own per-symbol
+/// capacity. The splitter in [`encode_multi`] is written once against this.
+trait Codec {
+    /// Encode `data` into a single symbol, or explain why it does not fit.
+    fn encode(&self, data: &[u8]) -> Result<Symbol, AppError>;
+    /// Whether `data` fits a single symbol.
+    fn fits(&self, data: &[u8]) -> bool;
+    /// The largest byte length a single symbol can hold; bounds the split search.
+    fn capacity(&self) -> usize;
+}
+
+/// Largest byte length any single QR symbol can hold (version 40-L numeric): the
+/// bound for the split search (FR-2.5).
+const QR_MAX_BYTES: usize = 7089;
+
+/// Largest byte length any single Data Matrix square symbol can hold (144x144
+/// numeric): the bound for the split search (FR-2.6).
+const DATAMATRIX_MAX_BYTES: usize = 3116;
+
+/// QR codec: the `qrcode` crate at the exact error level (`qrcode` never boosts
+/// it, matching qrpipe's `boost_error=false`).
+struct QrCodec {
+    ec: Ec,
+}
+
+impl Codec for QrCodec {
+    fn encode(&self, data: &[u8]) -> Result<Symbol, AppError> {
+        build(data, self.ec)
+            .map(|qr| to_symbol(&qr))
+            .map_err(|error| match error {
+                QrError::DataTooLong => {
+                    let max = max_prefix_fitting(self, data);
+                    AppError::Input(format!(
+                        "input too long: {} bytes (maximum {} bytes at error-correction level {:?})",
+                        data.len(),
+                        max,
+                        self.ec
+                    ))
+                }
+                _ => AppError::Input("input cannot be encoded as a QR code".to_string()),
+            })
+    }
+
+    fn fits(&self, data: &[u8]) -> bool {
+        fits(data, self.ec)
+    }
+
+    fn capacity(&self) -> usize {
+        QR_MAX_BYTES
+    }
+}
+
+/// Data Matrix codec (ECC 200), restricted to square symbols.
+///
+/// Data Matrix has no user-selectable error-correction level — it is fixed by the
+/// symbol size — so [`Codec::capacity`] uses the largest square symbol and the
+/// error-correction level is not consulted here (FR-2.6).
+struct DataMatrixCodec;
+
+impl Codec for DataMatrixCodec {
+    fn encode(&self, data: &[u8]) -> Result<Symbol, AppError> {
+        data_matrix_symbol(data).map_err(|_| {
+            let max = max_prefix_fitting(self, data);
+            AppError::Input(format!(
+                "input too long: {} bytes (maximum {} bytes in a Data Matrix symbol)",
+                data.len(),
+                max
+            ))
+        })
+    }
+
+    fn fits(&self, data: &[u8]) -> bool {
+        data_matrix_symbol(data).is_ok()
+    }
+
+    fn capacity(&self) -> usize {
+        DATAMATRIX_MAX_BYTES
+    }
+}
+
+/// Encode `data` into a square Data Matrix symbol as a neutral [`Symbol`].
+///
+/// Valid UTF-8 goes through the crate's string path, which declares a UTF-8 ECI
+/// for text outside Latin-1 and uses Latin-1 otherwise (the Data Matrix default
+/// charset); any other bytes use the raw path. Only square symbols are requested
+/// so terminal output stays square.
+fn data_matrix_symbol(data: &[u8]) -> Result<Symbol, datamatrix::data::DataEncodingError> {
+    let symbols = SymbolList::default().enforce_square();
+    let code = match std::str::from_utf8(data) {
+        Ok(text) => DataMatrix::encode_str(text, symbols)?,
+        Err(_) => DataMatrix::encode(data, symbols)?,
+    };
+    let bitmap = code.bitmap();
+    let (width, height) = (bitmap.width(), bitmap.height());
+    let mut dark = vec![false; width * height];
+    for (x, y) in bitmap.pixels() {
+        dark[y * width + x] = true;
+    }
+    Ok(Symbol::new(width, height, dark))
+}
+
 /// Encode `data` into an ordinary QR code at the exact error level.
 ///
 /// `qrcode` never boosts the error level, matching qrpipe's `boost_error=false`.
 pub fn encode(data: &[u8], ec: Ec) -> Result<Symbol, AppError> {
-    build(data, ec)
-        .map(|qr| to_symbol(&qr))
-        .map_err(|error| match error {
-            QrError::DataTooLong => {
-                let max = max_prefix_fitting(data, ec);
-                AppError::Input(format!(
-                    "input too long: {} bytes (maximum {} bytes at error-correction level {ec:?})",
-                    data.len(),
-                    max
-                ))
-            }
-            _ => AppError::Input("input cannot be encoded as a QR code".to_string()),
-        })
+    QrCodec { ec }.encode(data)
 }
 
-/// Encode `data`, splitting it across as many QR codes as needed.
+/// Encode `data` in `format`, splitting it across as many symbols as needed.
 ///
-/// Each code holds at most `max_bytes` payload bytes (when `None`, the most a
+/// Each symbol holds at most `max_bytes` payload bytes (when `None`, the most a
 /// single symbol can hold; a value below 1 is treated as 1), and the payload is
-/// spread across at least
-/// `min_chunks` codes when the content allows (advisory; one code per character
-/// is the ceiling). The chunks are as evenly sized as capacity allows, and when
-/// `data` is valid UTF-8 the cuts retreat to character boundaries, so a
-/// multi-byte character is never divided between two symbols. A payload that is
-/// within every limit yields a single code.
+/// spread across at least `min_chunks` symbols when the content allows (advisory;
+/// one symbol per character is the ceiling). The chunks are as evenly sized as the
+/// symbology's capacity allows, and when `data` is valid UTF-8 the cuts retreat to
+/// character boundaries, so a multi-byte character is never divided between two
+/// symbols. A payload that is within every limit yields a single symbol.
 pub fn encode_multi(
     data: &[u8],
+    format: Format,
     ec: Ec,
     max_bytes: Option<usize>,
     min_chunks: Option<usize>,
 ) -> Result<Vec<Symbol>, AppError> {
-    split_chunks(data, ec, max_bytes, min_chunks)
+    let qr = QrCodec { ec };
+    let datamatrix = DataMatrixCodec;
+    let codec: &dyn Codec = match format {
+        Format::Qr => &qr,
+        Format::DataMatrix => &datamatrix,
+    };
+    split_chunks_with(codec, data, max_bytes, min_chunks)
         .into_iter()
-        .map(|chunk| encode(chunk, ec))
+        .map(|chunk| codec.encode(chunk))
         .collect()
 }
 
-/// Extra symbols [`split_chunks`] may add while seeking an even cut before it
-/// falls back to a greedy maximal split.
+/// Extra symbols the splitter may add while seeking an even cut before it falls
+/// back to a greedy maximal split.
 const BALANCE_SLACK: usize = 8;
 
-/// Split `data` into contiguous chunks that each fit at `ec` and stay within
+/// Split `data` into contiguous chunks that each fit `codec` and stay within
 /// `max_bytes`, sized as evenly as possible, using at least `min_chunks` codes
 /// when the content allows.
 ///
-/// The effective byte cap is `max_bytes` clamped to the content's own per-symbol
+/// The effective byte cap is `max_bytes` clamped to the symbology's own per-symbol
 /// limit and floored at one byte, so a zero or tiny cap yields one byte (or one
 /// whole character) per code rather than dividing by zero. The fewest symbols
 /// that can hold `data` under that cap is a lower
@@ -162,13 +262,13 @@ const BALANCE_SLACK: usize = 8;
 /// An even cut at that count (or up to [`BALANCE_SLACK`] more, when a
 /// content-dependent mode makes an even cut unencodable) is preferred. A greedy
 /// maximal split is the guaranteed fallback.
-fn split_chunks(
-    data: &[u8],
-    ec: Ec,
+fn split_chunks_with<'a>(
+    codec: &dyn Codec,
+    data: &'a [u8],
     max_bytes: Option<usize>,
     min_chunks: Option<usize>,
-) -> Vec<&[u8]> {
-    let capacity = max_prefix_fitting(data, ec).max(1);
+) -> Vec<&'a [u8]> {
+    let capacity = max_prefix_fitting(codec, data).max(1);
     // Floor the cap at one byte so a zero (or absent) `max_bytes` cannot reach
     // `div_ceil(0)` below; a zero cap splits one byte per code instead of panicking.
     let cap = max_bytes
@@ -180,19 +280,30 @@ fn split_chunks(
     let floor = min_chunks.unwrap_or(1).min(most);
     let fewest = data.len().div_ceil(cap);
     let first = fewest.max(floor);
-    if first <= 1 && fits(data, ec) {
+    if first <= 1 && codec.fits(data) {
         return vec![data];
     }
     for count in first..=first + BALANCE_SLACK {
         let chunks = even_chunks(data, count, text);
         if chunks
             .iter()
-            .all(|chunk| !chunk.is_empty() && chunk.len() <= cap && fits(chunk, ec))
+            .all(|chunk| !chunk.is_empty() && chunk.len() <= cap && codec.fits(chunk))
         {
             return chunks;
         }
     }
-    greedy_chunks(data, ec, text, cap)
+    greedy_chunks(codec, data, text, cap)
+}
+
+/// Split a QR payload; a test-only shim over [`split_chunks_with`].
+#[cfg(test)]
+fn split_chunks(
+    data: &[u8],
+    ec: Ec,
+    max_bytes: Option<usize>,
+    min_chunks: Option<usize>,
+) -> Vec<&[u8]> {
+    split_chunks_with(&QrCodec { ec }, data, max_bytes, min_chunks)
 }
 
 /// Split `data` into `count` chunks whose byte lengths differ by at most one,
@@ -216,12 +327,17 @@ fn even_chunks<'a>(data: &'a [u8], count: usize, text: Option<&str>) -> Vec<&'a 
 }
 
 /// Split `data` greedily: each chunk is the largest prefix of the remainder that
-/// fits at `ec` and stays within `cap`. Feasible whenever a split is needed.
-fn greedy_chunks<'a>(data: &'a [u8], ec: Ec, text: Option<&str>, cap: usize) -> Vec<&'a [u8]> {
+/// fits `codec` and stays within `cap`. Feasible whenever a split is needed.
+fn greedy_chunks<'a>(
+    codec: &dyn Codec,
+    data: &'a [u8],
+    text: Option<&str>,
+    cap: usize,
+) -> Vec<&'a [u8]> {
     let mut chunks = Vec::new();
     let mut offset = 0;
     while offset < data.len() {
-        let mut end = offset + max_prefix_fitting(&data[offset..], ec).min(cap);
+        let mut end = offset + max_prefix_fitting(codec, &data[offset..]).min(cap);
         if let Some(text) = text {
             while end > offset && !text.is_char_boundary(end) {
                 end -= 1;
@@ -243,18 +359,15 @@ fn greedy_chunks<'a>(data: &'a [u8], ec: Ec, text: Option<&str>, cap: usize) -> 
     chunks
 }
 
-/// The largest length any single QR symbol can hold (numeric mode, version 40-L).
-const ABSOLUTE_MAX_BYTES: usize = 7089;
-
-/// Largest prefix of `data`, in bytes, that still fits at `ec`.
+/// Largest prefix of `data`, in bytes, that still fits a single `codec` symbol.
 ///
-/// Bounded by [`ABSOLUTE_MAX_BYTES`] so the search cost does not grow with an
+/// Bounded by `codec.capacity()` so the search cost does not grow with an
 /// arbitrarily large rejected input.
-fn max_prefix_fitting(data: &[u8], ec: Ec) -> usize {
-    let (mut lo, mut hi) = (0usize, data.len().min(ABSOLUTE_MAX_BYTES));
+fn max_prefix_fitting(codec: &dyn Codec, data: &[u8]) -> usize {
+    let (mut lo, mut hi) = (0usize, data.len().min(codec.capacity()));
     while lo < hi {
         let mid = lo + (hi - lo).div_ceil(2);
-        if fits(&data[..mid], ec) {
+        if codec.fits(&data[..mid]) {
             lo = mid;
         } else {
             hi = mid - 1;
@@ -300,12 +413,63 @@ mod tests {
 
     #[test]
     fn multi_keeps_a_fitting_payload_as_one_code() {
-        assert_eq!(encode_multi(b"hello", Ec::M, None, None).unwrap().len(), 1);
+        assert_eq!(
+            encode_multi(b"hello", Format::Qr, Ec::M, None, None)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn datamatrix_encodes_a_square_symbol() {
+        let symbols = encode_multi(b"hello", Format::DataMatrix, Ec::L, None, None).unwrap();
+        assert_eq!(symbols.len(), 1);
+        assert_eq!(symbols[0].width(), symbols[0].height(), "must be square");
+    }
+
+    #[test]
+    fn datamatrix_encodes_non_ascii() {
+        // Valid UTF-8 outside Latin-1 is declared with a UTF-8 ECI by the crate.
+        assert!(
+            encode_multi(
+                "你好，世界".as_bytes(),
+                Format::DataMatrix,
+                Ec::L,
+                None,
+                None
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn datamatrix_splits_an_oversized_payload() {
+        let codes = encode_multi(&vec![b'a'; 4000], Format::DataMatrix, Ec::L, None, None).unwrap();
+        assert!(codes.len() > 1, "expected more than one symbol");
+    }
+
+    #[test]
+    fn datamatrix_split_covers_the_payload() {
+        let data = vec![b'a'; 4000];
+        let chunks = split_chunks_with(&DataMatrixCodec, &data, None, None);
+        assert!(chunks.len() > 1, "expected a split");
+        assert_eq!(chunks.concat(), data);
+    }
+
+    #[test]
+    fn datamatrix_reports_the_ceiling_for_an_oversized_input() {
+        let huge = vec![b'a'; 4000];
+        let Err(AppError::Input(message)) = DataMatrixCodec.encode(&huge) else {
+            panic!("expected an input error");
+        };
+        assert!(message.contains("Data Matrix"), "{message}");
+        assert!(message.contains("4000"), "{message}");
     }
 
     #[test]
     fn multi_splits_an_oversized_payload() {
-        let codes = encode_multi(&vec![b'x'; 4000], Ec::L, None, None).unwrap();
+        let codes = encode_multi(&vec![b'x'; 4000], Format::Qr, Ec::L, None, None).unwrap();
         assert!(codes.len() > 1, "expected more than one code");
     }
 
@@ -405,7 +569,7 @@ mod tests {
 
     #[test]
     fn encode_multi_honors_max_bytes() {
-        let codes = encode_multi(&vec![b'a'; 250], Ec::L, Some(100), None).unwrap();
+        let codes = encode_multi(&vec![b'a'; 250], Format::Qr, Ec::L, Some(100), None).unwrap();
         assert_eq!(codes.len(), 3);
     }
 
@@ -414,10 +578,10 @@ mod tests {
         // Regression: a zero cap used to reach `div_ceil(0)` and panic. It is
         // floored to one byte, so the payload still splits (one byte, or one
         // whole character, per code) and no character is divided.
-        let ascii = encode_multi(b"abc", Ec::L, Some(0), None).unwrap();
+        let ascii = encode_multi(b"abc", Format::Qr, Ec::L, Some(0), None).unwrap();
         assert_eq!(ascii.len(), 3, "one byte per code");
 
-        let cjk = encode_multi("汉字".as_bytes(), Ec::L, Some(0), None).unwrap();
+        let cjk = encode_multi("汉字".as_bytes(), Format::Qr, Ec::L, Some(0), None).unwrap();
         assert_eq!(cjk.len(), 2, "one whole character per code");
     }
 

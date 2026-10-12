@@ -240,3 +240,35 @@ fn short_help_lists_the_mode_option_and_its_values() {
     assert!(help.contains("kitty"), "{help}");
     assert!(help.contains("sixel"), "{help}");
 }
+
+#[test]
+fn datamatrix_format_prints_a_symbol() {
+    let output = stdout(&["--format", "datamatrix", "hello"]);
+    assert!(output.chars().any(is_block), "no block glyphs in output");
+    assert!(output.lines().count() > 4, "output too short: {output:?}");
+}
+
+#[test]
+fn datamatrix_short_format_is_accepted() {
+    assert_eq!(
+        stdout(&["-F", "dm", "hello"]),
+        stdout(&["--format", "datamatrix", "hello"])
+    );
+}
+
+#[test]
+fn datamatrix_splits_with_its_own_caption() {
+    let payload = "a".repeat(4000);
+    let text = stdout(&["--format", "datamatrix", "-e", "L", &payload]);
+    assert!(text.contains("DM 1/"), "missing datamatrix caption");
+    assert!(!text.contains("QR "), "leaked a QR caption");
+}
+
+#[test]
+fn unknown_format_exits_two() {
+    qrtxt()
+        .args(["--format", "pdf417", "hello"])
+        .assert()
+        .failure()
+        .code(2);
+}

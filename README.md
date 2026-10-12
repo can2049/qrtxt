@@ -7,10 +7,11 @@ Turn text into a QR code, right in your terminal.
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![crates.io](https://img.shields.io/crates/v/qrtxt.svg)](https://crates.io/crates/qrtxt)
 
-`qrtxt` reads a string, a file, or piped input and prints an ordinary QR code.
-By default it picks the best rendering your terminal offers — a crisp bitmap
-over the Kitty or Sixel graphics protocol where supported, otherwise Unicode
-block characters, so a plain UTF-8 terminal always works.
+`qrtxt` reads a string, a file, or piped input and prints an ordinary QR code —
+or, with `--format datamatrix`, a Data Matrix (ECC 200) symbol. By default it
+picks the best rendering your terminal offers — a crisp bitmap over the Kitty or
+Sixel graphics protocol where supported, otherwise Unicode block characters, so
+a plain UTF-8 terminal always works.
 
 ```console
 $ qrtxt "hi"
@@ -33,7 +34,10 @@ $ qrtxt "hi"
 ## Features
 
 - **Three input modes** — a literal argument, a file (`--file`), or standard input.
-- **Exact error correction** — `L`, `M`, `Q`, or `H`, never silently boosted.
+- **Two barcode formats** — QR codes (the default) and Data Matrix (ECC 200)
+  symbols, selected with `--format`.
+- **Exact error correction** — `L`, `M`, `Q`, or `H`, never silently boosted
+  (QR only; a Data Matrix's correction is fixed by its symbol size).
 - **Five render modes** — `--mode auto` (default) picks the best rendering the
   terminal offers: a crisp bitmap over the Kitty or Sixel graphics protocol where
   supported, otherwise Unicode block glyphs. Force a specific one with `text`,
@@ -91,8 +95,9 @@ Payload:
 
 Encoding:
   -e, --error-correction <LEVEL>  Error-correction level: L (about 7% recoverable), M (15%), Q (25%), or H (30%) [default: L]
-  -m, --max-bytes <BYTES>         Cap the payload of each QR code at BYTES bytes; implies splitting (default: the symbol's own limit)
-  -c, --chunk <COUNT>             Split the payload across at least COUNT QR codes; advisory (default: no minimum)
+  -F, --format <FORMAT>           Barcode format: qr or datamatrix [default: qr]
+  -m, --max-bytes <BYTES>         Cap the payload of each symbol at BYTES bytes; implies splitting (default: the symbol's own limit)
+  -c, --chunk <COUNT>             Split the payload across at least COUNT symbols; advisory (default: no minimum)
 
 Rendering:
   -M, --mode <MODE>      How to draw the code: auto, text, ansi, kitty, or sixel [default: auto]
@@ -126,6 +131,9 @@ qrtxt --mode kitty "https://example.com"
 # a crisp black-and-white bitmap (needs a Sixel-protocol terminal)
 qrtxt --mode sixel "https://example.com"
 
+# a Data Matrix (ECC 200) symbol instead of a QR code
+qrtxt --format datamatrix "https://example.com"
+
 # force Unicode block glyphs (for a pipe, or to compare against a bitmap)
 qrtxt --mode text "hello"
 
@@ -150,6 +158,23 @@ qrtxt --max-bytes 500 --file big.txt
 # split into at least 4 balanced codes
 qrtxt --chunk 4 "a-short-but-verifiable-payload"
 ```
+
+## Barcode formats
+
+`--format` chooses which symbol is produced; `--mode` (below) chooses how it is
+drawn. Both formats render through every mode.
+
+| `--format` | Symbol |
+|---|---|
+| `qr` (default) | An ordinary QR code. `--error-correction` applies. |
+| `datamatrix` (`dm`) | A Data Matrix (ECC 200) symbol, always square. |
+
+A Data Matrix holds far less data per symbol than a QR code (about 1555 bytes
+versus 2953 at the lowest error level), so the same payload splits into more
+symbols. Its error correction is fixed by the symbol size, so
+`--error-correction` does not apply to it and is ignored. Non-ASCII text is
+declared with a UTF-8 ECI, exactly as for QR; many scanners handle that
+inconsistently, so prefer printable ASCII where you can.
 
 ## Rendering modes
 
@@ -270,16 +295,21 @@ The crate is layered so that dependencies point in one direction only:
 
 - `cli` parses arguments and orchestrates the run (`run` / `run_with`).
 - `input`, `encode`, and `render` are pure and do not depend on `clap`.
+- `encode` wraps one barcode crate per symbology (`qrcode` for QR, `datamatrix`
+  for Data Matrix) and emits a symbology-agnostic `Symbol` — a dark/light module
+  grid — so only `encode` depends on a barcode library.
 - `kitty` and `sixel` hold the low-level protocol framing, shared by `cli` (the
   terminal probes) and `render` (bitmap transmission).
-- `types` holds the shared value types; `error` maps failures to exit codes.
+- `types` holds the shared value types (including `Symbol`); `error` maps failures
+  to exit codes.
 
-Rendering happens in two steps: `build_ink` turns the QR matrix into a boolean
-"ink" grid (applying the quiet zone and inversion), and `render` packs that grid
-into character cells per glyph set. `render_kitty` and `render_sixel` bypass the
-grid and emit a black-and-white bitmap over the Kitty or Sixel protocol. The
-round-trip test suite renders the output, reconstructs the module grid, and
-decodes it again with `rqrr` to prove the printed code is still scannable.
+Rendering happens in two steps: `build_ink` turns a `Symbol` into a boolean "ink"
+grid (applying the quiet zone and inversion), and `render` packs that grid into
+character cells per glyph set. `render_kitty` and `render_sixel` bypass the grid
+and emit a black-and-white bitmap over the Kitty or Sixel protocol. The round-trip
+test suite renders the output, reconstructs the module grid, and decodes it again
+— with `rqrr` for QR and the `datamatrix` crate for Data Matrix — to prove the
+printed code is still scannable.
 
 ## License
 

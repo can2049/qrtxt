@@ -70,12 +70,13 @@ pub fn strip_one_line_ending(mut bytes: Vec<u8>) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Ec, GlyphSet, RenderMode};
+    use crate::types::{Ec, Format, GlyphSet, RenderMode};
 
     fn literal(text: &str, preserve_newline: bool) -> Config {
         Config {
             input: InputSpec::Literal(text.to_string()),
             ec: Ec::M,
+            format: Format::Qr,
             border: 4,
             invert: false,
             glyphs: GlyphSet::Half,
