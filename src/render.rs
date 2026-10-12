@@ -220,7 +220,7 @@ pub fn render_ansi(frame: &Frame, out: &mut dyn Write) -> io::Result<()> {
 /// Target rendered size, in pixels; the per-module scale is derived from it.
 const TARGET_PX: usize = 300;
 /// Bounds on the pixels-per-module scale.
-const MIN_MODULE_PX: usize = 2;
+const MIN_MODULE_PX: usize = 3;
 const MAX_MODULE_PX: usize = 8;
 
 /// A QR scaled to a square pixel bitmap: `image_px` pixels per side, `true` marks

@@ -43,7 +43,7 @@ input -> encode -> render::render_sixel -> sixel::encode -> stdout
   - `encode`：写调色板 + 光栅属性 + 逐带（黑白各一遍）RLE 数据 + 终止。
   - `write_rle`：游程压缩；`da1_query` / `response_has_sixel`：探测序列与判定。
 - **`src/render.rs`**：`module_bitmap(qr, border)` 把二维码矩阵放大成方形像素位图
-  （`module_px = (300 / side).clamp(2, 8)`，静默区为亮色），`render_kitty` 与
+  （`module_px = (300 / side).clamp(3, 8)`，静默区为亮色），`render_kitty` 与
   `render_sixel` 共用；`render_sixel` 再把位图交给 `sixel::encode`。
 - **`src/types.rs`**：`RenderMode::Sixel`。
 - **`src/cli/`**：`mod.rs` 放 `-M/--mode` 开关（值 `auto`/`text`/`ansi`/`kitty`/`sixel`）与渲染

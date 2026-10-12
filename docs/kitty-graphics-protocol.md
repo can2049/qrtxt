@@ -47,7 +47,7 @@ input -> encode -> render::render_kitty -> kitty::transmit_rgb -> stdout
   - `transmit_rgb`：按 3072 字节分块，首块带全部控制键，末块 `m=0`。
   - `query`：探测序列；`response_ok`：判定响应是否含 `;OK`。
 - **`src/render.rs`**：`render_kitty(qr, border, invert, id, out)` 把 QR 矩阵转 RGB 位图：
-  `side = qr.width() + 2*border`，`module_px = (300/side).clamp(2,8)`；
+  `side = qr.width() + 2*border`，`module_px = (300/side).clamp(3,8)`；
   暗模块→黑、亮模块→白（`--invert` 交换），静默区为亮色。
 - **`src/types.rs`**：新增 `RenderMode::Kitty`。
 - **`src/cli/`**：`mod.rs` 放 `-M/--mode` 开关（值 `auto`/`text`/`ansi`/`kitty`/`sixel`）与逐码 id 分配；
