@@ -101,10 +101,15 @@ trait Codec {
 - `cargo test`:lib + cli + roundtrip 全绿。
 - **可扫性(核心)**:
   - `datamatrix_ascii_round_trips`:ASCII 负载走完整「CLI 渲染 → 解析网格 →
-    `datamatrix::DataMatrix::decode` 解码」往返(多字形集)。
-  - `datamatrix_grid_matches_the_encoder`:UTF-8 负载(crate 解码器对 ECI 不返回原始字节)
-    **逐模块比对**打印网格与编码器符号网格。
-  - `datamatrix_split_round_trips_in_order`:大负载分片后逐块解码、按序拼接还原。
+    `DataMatrix::decode` 解码」往返(多字形集)。
+  - `datamatrix_cjk_round_trips`:**CJK/emoji** 负载——crate 的像素解码器拒绝带 ECI 的符号,
+    故以两段合成证明:① `data::decode_str(codewords)` 解回原文;② 我方 `encode` 产出的符号与
+    crate 符号**逐模块相等**。二者叠加即证明打印出的 CJK 符号可解回原文。
+  - `datamatrix_grid_matches_the_encoder`:全部 `CJK_SAMPLES` × 3 组字形/反相,逐模块比对打印
+    网格与编码器符号网格(证明渲染无损)。
+  - `datamatrix_split_round_trips_in_order` / `datamatrix_max_bytes_split_round_trips_in_order`:
+    自然拆分与 `--max-bytes` 拆分,逐块解码、按序拼接还原。
+  - `datamatrix_symbol_sizes_round_trip`:最小符号(1 字节)与较大符号。
   - `datamatrix_inverted_round_trips`:反相可扫。
 - **单测**:`encode` 侧方形校验 / 非 ASCII 可编码 / 超限报错 / 分片覆盖。
 - **行为**:`tests/cli.rs` 覆盖 `-F dm` 与 `--format datamatrix` 等价、多码 `Data Matrix i/N` 标题、
