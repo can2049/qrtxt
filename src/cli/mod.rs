@@ -7,10 +7,9 @@
 use std::io::{IsTerminal, Write};
 
 use clap::Parser;
-use qrcode::QrCode;
 
 use crate::error::AppError;
-use crate::types::{Config, Ec, GlyphSet, InputSpec, Mode, RenderMode};
+use crate::types::{Config, Ec, GlyphSet, InputSpec, Mode, RenderMode, Symbol};
 
 mod help;
 mod probe;
@@ -264,29 +263,30 @@ pub fn run(
 const KITTY_IMAGE_ID_BASE: u32 = 424_242;
 
 /// Draw every code; when there is more than one, caption each and separate them.
-fn render_all(cfg: &Config, codes: &[QrCode], out: &mut dyn std::io::Write) -> std::io::Result<()> {
+fn render_all(cfg: &Config, codes: &[Symbol], out: &mut dyn std::io::Write) -> std::io::Result<()> {
     let total = codes.len();
-    for (index, qr) in codes.iter().enumerate() {
+    for (index, symbol) in codes.iter().enumerate() {
         if total > 1 {
             writeln!(out, "QR {}/{}", index + 1, total)?;
         }
         match cfg.mode {
             RenderMode::Kitty => {
                 let id = KITTY_IMAGE_ID_BASE.wrapping_add(index as u32);
-                crate::render::render_kitty(qr, cfg.border, cfg.invert, id, out)?;
+                crate::render::render_kitty(symbol, cfg.border, cfg.invert, id, out)?;
             }
             RenderMode::Sixel => {
-                crate::render::render_sixel(qr, cfg.border, cfg.invert, out)?;
+                crate::render::render_sixel(symbol, cfg.border, cfg.invert, out)?;
             }
             RenderMode::Compact => {
-                let frame = crate::render::build_ink(qr, cfg.border, cfg.invert, cfg.glyphs);
+                let frame = crate::render::build_ink(symbol, cfg.border, cfg.invert, cfg.glyphs);
                 crate::render::render(&frame, cfg.glyphs, out)?;
             }
             RenderMode::Ansi => {
                 // ANSI draws one module per two spaces and ignores the glyph set,
                 // so pin the frame's tile to the smallest one: the output is then
                 // independent of `--glyphs` instead of shifting with it.
-                let frame = crate::render::build_ink(qr, cfg.border, cfg.invert, GlyphSet::Half);
+                let frame =
+                    crate::render::build_ink(symbol, cfg.border, cfg.invert, GlyphSet::Half);
                 crate::render::render_ansi(&frame, out)?;
             }
         }
