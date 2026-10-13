@@ -68,6 +68,11 @@ fn round_up(value: usize, multiple: usize) -> usize {
 
 /// Build the ink grid: quiet zone (background), optional inversion, padded to a
 /// whole number of glyph tiles.
+///
+/// Ink marks the dark modules — the cells a renderer draws in the foreground —
+/// while the field (the light modules and the quiet zone) stays background, so
+/// dark modules read as black on a white field (FR-3.8). `invert` swaps the two
+/// (FR-3.9).
 #[must_use]
 pub fn build_ink(symbol: &Symbol, border: u32, invert: bool, glyph: GlyphSet) -> Frame {
     let src_w = symbol.width();
@@ -83,9 +88,8 @@ pub fn build_ink(symbol: &Symbol, border: u32, invert: bool, glyph: GlyphSet) ->
         for x in 0..width {
             let col_in_matrix = x >= b && x < b + src_w;
             ink[y * width + x] = if row_in_matrix && col_in_matrix {
-                // Default: light modules are ink (FR-3.8); `invert` flips it (FR-3.9).
-                let light = !symbol.is_dark(x - b, y - b);
-                light ^ invert
+                // Default: dark modules are ink (FR-3.8); `invert` flips it (FR-3.9).
+                symbol.is_dark(x - b, y - b) ^ invert
             } else {
                 false // quiet zone and tile padding stay background
             };
@@ -94,34 +98,117 @@ pub fn build_ink(symbol: &Symbol, border: u32, invert: bool, glyph: GlyphSet) ->
     Frame::new(width, height, ink)
 }
 
-/// Render a frame using the given glyph set.
+/// Render a frame using the given glyph set, without any colour control.
+///
+/// Ink cells become block glyphs and background cells spaces; wrap the result in
+/// an explicit colour context — as [`render_on_field`] does — to fix what those
+/// two roles look like on the terminal.
 pub fn render(frame: &Frame, glyph: GlyphSet, out: &mut dyn Write) -> io::Result<()> {
-    match glyph {
-        GlyphSet::Half => render_half(frame, out),
-        GlyphSet::Quadrant => render_quadrant(frame, out),
-        GlyphSet::Braille => render_braille(frame, out),
-    }
-}
-
-/// Half blocks: one text row carries a 1x2 tile (FR-3.1).
-pub fn render_half(frame: &Frame, out: &mut dyn Write) -> io::Result<()> {
-    debug_assert!(frame.height() % 2 == 0, "build_ink pads to the glyph tile");
-    let mut y = 0;
-    while y < frame.height() {
-        let mut line = String::with_capacity(frame.width());
-        for x in 0..frame.width() {
-            line.push(match (frame.at(x, y), frame.at(x, y + 1)) {
-                (true, true) => '\u{2588}',  // full block
-                (true, false) => '\u{2580}', // upper half
-                (false, true) => '\u{2584}', // lower half
-                (false, false) => ' ',
-            });
-        }
+    for row in 0..text_rows(frame, glyph) {
+        let mut line = row_glyphs(frame, glyph, row);
         line.push('\n');
         out.write_all(line.as_bytes())?;
-        y += 2;
     }
     Ok(())
+}
+
+/// Explicit colours that render dark modules black on a white field (FR-3.8);
+/// [`render_on_field`] and [`render_ansi`] pick the pair for `invert` (FR-3.9),
+/// which swaps them so the modules read light on a dark field.
+const DARK_ON_LIGHT: &str = "\x1b[30;107m";
+const LIGHT_ON_DARK: &str = "\x1b[97;40m";
+const RESET: &str = "\x1b[0m";
+
+/// Render a frame as block glyphs inside an explicit colour context, so the code
+/// is a self-contained dark-on-white image (FR-3.8) rather than one that borrows
+/// the terminal's own colours — the quiet zone stays white even on a black
+/// terminal. `invert` swaps the two colours (FR-3.9). Prefer this over [`render`]
+/// for terminal output.
+pub fn render_on_field(
+    frame: &Frame,
+    glyph: GlyphSet,
+    invert: bool,
+    out: &mut dyn Write,
+) -> io::Result<()> {
+    let prologue = if invert { LIGHT_ON_DARK } else { DARK_ON_LIGHT };
+    for row in 0..text_rows(frame, glyph) {
+        out.write_all(prologue.as_bytes())?;
+        out.write_all(row_glyphs(frame, glyph, row).as_bytes())?;
+        // Reset before the line feed: a terminal that carries the active colour
+        // through the newline would otherwise paint the rest of the row in the
+        // field colour, stretching the background across the whole line.
+        out.write_all(RESET.as_bytes())?;
+        out.write_all(b"\n")?;
+    }
+    Ok(())
+}
+
+/// Number of text rows a frame occupies when packed with `glyph`.
+fn text_rows(frame: &Frame, glyph: GlyphSet) -> usize {
+    let tile_h = glyph.tile().1;
+    debug_assert_eq!(
+        frame.height() % tile_h,
+        0,
+        "build_ink pads to the glyph tile"
+    );
+    frame.height() / tile_h
+}
+
+/// Pack text row `row` of `frame` into glyphs, one character per horizontal cell.
+fn row_glyphs(frame: &Frame, glyph: GlyphSet, row: usize) -> String {
+    let top = row * glyph.tile().1;
+    match glyph {
+        // Half blocks: one text row carries a 1x2 tile (FR-3.1).
+        GlyphSet::Half => {
+            let mut line = String::with_capacity(frame.width());
+            for x in 0..frame.width() {
+                line.push(match (frame.at(x, top), frame.at(x, top + 1)) {
+                    (true, true) => '\u{2588}',  // full block
+                    (true, false) => '\u{2580}', // upper half
+                    (false, true) => '\u{2584}', // lower half
+                    (false, false) => ' ',
+                });
+            }
+            line
+        }
+        // Quadrant blocks: one text row carries a 2x2 tile (FR-3.11).
+        GlyphSet::Quadrant => {
+            let mut line = String::with_capacity(frame.width() / 2);
+            for left in (0..frame.width()).step_by(2) {
+                let mut index = 0usize;
+                if frame.at(left, top) {
+                    index |= 1;
+                }
+                if frame.at(left + 1, top) {
+                    index |= 2;
+                }
+                if frame.at(left, top + 1) {
+                    index |= 4;
+                }
+                if frame.at(left + 1, top + 1) {
+                    index |= 8;
+                }
+                line.push(QUADRANT[index]);
+            }
+            line
+        }
+        // Braille dots: one text row carries a 2x4 tile (FR-3.11).
+        GlyphSet::Braille => {
+            let mut line = String::with_capacity(frame.width() / 2);
+            for left in (0..frame.width()).step_by(2) {
+                let mut bits = 0u32;
+                for (column, weights) in BRAILLE_WEIGHTS.iter().enumerate() {
+                    for (dot_row, weight) in weights.iter().enumerate() {
+                        if frame.at(left + column, top + dot_row) {
+                            bits += weight;
+                        }
+                    }
+                }
+                line.push(char::from_u32(0x2800 + bits).expect("valid braille code point"));
+            }
+            line
+        }
+    }
 }
 
 /// 2x2 quadrant blocks: 16 combinations -> 16 characters.
@@ -138,69 +225,40 @@ const BRAILLE_WEIGHTS: [[u32; 4]; 2] = [
     [0x08, 0x10, 0x20, 0x80], // dots 4, 5, 6, 8
 ];
 
+/// Half blocks: one text row carries a 1x2 tile (FR-3.1).
+pub fn render_half(frame: &Frame, out: &mut dyn Write) -> io::Result<()> {
+    render(frame, GlyphSet::Half, out)
+}
+
 /// Quadrant blocks: one text row carries a 2x2 tile (FR-3.11).
 pub fn render_quadrant(frame: &Frame, out: &mut dyn Write) -> io::Result<()> {
-    for top in (0..frame.height()).step_by(2) {
-        let mut line = String::with_capacity(frame.width() / 2);
-        for left in (0..frame.width()).step_by(2) {
-            let mut index = 0usize;
-            if frame.at(left, top) {
-                index |= 1;
-            }
-            if frame.at(left + 1, top) {
-                index |= 2;
-            }
-            if frame.at(left, top + 1) {
-                index |= 4;
-            }
-            if frame.at(left + 1, top + 1) {
-                index |= 8;
-            }
-            line.push(QUADRANT[index]);
-        }
-        line.push('\n');
-        out.write_all(line.as_bytes())?;
-    }
-    Ok(())
+    render(frame, GlyphSet::Quadrant, out)
 }
 
 /// Braille dots: one text row carries a 2x4 tile (FR-3.11).
 pub fn render_braille(frame: &Frame, out: &mut dyn Write) -> io::Result<()> {
-    for top in (0..frame.height()).step_by(4) {
-        let mut line = String::with_capacity(frame.width() / 2);
-        for left in (0..frame.width()).step_by(2) {
-            let mut bits = 0u32;
-            for (column, weights) in BRAILLE_WEIGHTS.iter().enumerate() {
-                for (row, weight) in weights.iter().enumerate() {
-                    if frame.at(left + column, top + row) {
-                        bits += weight;
-                    }
-                }
-            }
-            line.push(char::from_u32(0x2800 + bits).expect("valid braille code point"));
-        }
-        line.push('\n');
-        out.write_all(line.as_bytes())?;
-    }
-    Ok(())
+    render(frame, GlyphSet::Braille, out)
 }
 
-/// ANSI rendering: two spaces per module, reverse-video for ink.
-///
-/// Like the block renderers, this relies on the terminal's foreground color
-/// (see the requirements note on dark/light themes); `--invert` handles the
-/// light-background case. Prefer [`render`].
-pub fn render_ansi(frame: &Frame, out: &mut dyn Write) -> io::Result<()> {
-    const INK: &str = "\x1b[7m";
-    const BACKGROUND: &str = "\x1b[49m";
-    const RESET: &str = "\x1b[0m";
+/// ANSI rendering: two spaces per module, coloured by an explicit background —
+/// dark modules black on a white field (FR-3.8) — so the code is self-contained
+/// and the quiet zone stays white even on a black terminal. `invert` swaps the
+/// two colours (FR-3.9).
+pub fn render_ansi(frame: &Frame, invert: bool, out: &mut dyn Write) -> io::Result<()> {
+    // Each module is two spaces, so the background colour they carry paints one
+    // square module. `ink` marks dark modules by default; `invert` flips that.
+    let (module, field) = if invert {
+        ("\x1b[107m", "\x1b[40m")
+    } else {
+        ("\x1b[40m", "\x1b[107m")
+    };
     for y in 0..frame.height() {
         let mut line = String::with_capacity(frame.width() * 5);
         let mut previous: Option<bool> = None;
         for x in 0..frame.width() {
             let ink = frame.at(x, y);
             if previous != Some(ink) {
-                line.push_str(if ink { INK } else { BACKGROUND });
+                line.push_str(if ink { module } else { field });
                 previous = Some(ink);
             }
             line.push_str("  ");
@@ -449,12 +507,66 @@ mod tests {
     }
 
     #[test]
-    fn ansi_wraps_each_line_and_resets() {
+    fn build_ink_marks_dark_modules_and_leaves_the_quiet_zone_as_field() {
+        // A 2x2 all-dark symbol with a 1-module border: the four quiet-zone cells
+        // stay background (field) and the four matrix cells are ink.
+        let symbol = Symbol::new(2, 2, vec![true, true, true, true]);
+        let frame = build_ink(&symbol, 1, false, GlyphSet::Half);
+        assert_eq!((frame.width(), frame.height()), (4, 4));
+        for y in 0..4 {
+            for x in 0..4 {
+                let in_matrix = (1..3).contains(&x) && (1..3).contains(&y);
+                assert_eq!(frame.at(x, y), in_matrix, "at ({x},{y})");
+            }
+        }
+    }
+
+    #[test]
+    fn build_ink_invert_flips_the_module_ink() {
+        let symbol = Symbol::new(2, 2, vec![true, true, true, true]);
+        let frame = build_ink(&symbol, 1, true, GlyphSet::Half);
+        // Inverted: the all-dark matrix becomes background, so only field shows.
+        assert!(!frame.at(1, 1));
+    }
+
+    #[test]
+    fn render_on_field_wraps_the_glyphs_in_colours() {
         let mut buffer = Vec::new();
-        render_ansi(&sample(), &mut buffer).unwrap();
+        render_on_field(&sample(), GlyphSet::Half, false, &mut buffer).unwrap();
+        assert_eq!(
+            String::from_utf8(buffer).unwrap(),
+            format!("{DARK_ON_LIGHT}\u{2580}\u{2584}{RESET}\n")
+        );
+
+        let mut inverted = Vec::new();
+        render_on_field(&sample(), GlyphSet::Half, true, &mut inverted).unwrap();
+        assert!(
+            String::from_utf8(inverted)
+                .unwrap()
+                .starts_with(LIGHT_ON_DARK)
+        );
+    }
+
+    #[test]
+    fn ansi_paints_dark_modules_black_on_a_white_field() {
+        let mut buffer = Vec::new();
+        render_ansi(&sample(), false, &mut buffer).unwrap();
         let text = String::from_utf8(buffer).unwrap();
-        assert!(text.contains("\x1b[7m"));
-        assert!(text.contains("\x1b[49m"));
-        assert!(text.ends_with("\x1b[0m\n"));
+        // Ink (a dark module) carries the black background; the field the white one.
+        assert_eq!(
+            text,
+            "\x1b[40m  \x1b[107m  \x1b[0m\n\x1b[107m  \x1b[40m  \x1b[0m\n"
+        );
+    }
+
+    #[test]
+    fn ansi_invert_swaps_the_two_backgrounds() {
+        let mut buffer = Vec::new();
+        render_ansi(&sample(), true, &mut buffer).unwrap();
+        let text = String::from_utf8(buffer).unwrap();
+        assert!(
+            text.starts_with("\x1b[107m  \x1b[40m  \x1b[0m\n"),
+            "{text:?}"
+        );
     }
 }

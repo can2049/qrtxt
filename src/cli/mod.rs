@@ -110,7 +110,7 @@ pub struct Cli {
     /// smaller and crisper than block characters — and falls back to Unicode block
     /// glyphs otherwise. It never emits a bitmap when standard output is not a
     /// terminal, so piping or redirecting always yields text. `text` draws Unicode
-    /// block glyphs (honouring --glyphs); `ansi` draws reverse-video escape codes;
+    /// block glyphs (honouring --glyphs); `ansi` draws black-on-white escape codes;
     /// `kitty` and `sixel` force that bitmap protocol and fail with a usage error
     /// if the terminal does not support it.
     #[arg(
@@ -155,12 +155,12 @@ pub struct Cli {
     )]
     pub border: u32,
 
-    /// Invert the ink, for light-background terminals.
+    /// Invert the colors: draw a light-on-dark code instead of dark-on-light.
     ///
-    /// Modules are drawn in the terminal's foreground color, so the default suits a
-    /// dark background. On a light background the code would appear inverted; pass
-    /// this to keep it dark-on-light and scannable. In the bitmap modes it swaps
-    /// the two colors instead.
+    /// The text and ANSI renderers set explicit colors, so the code is a
+    /// self-contained dark-on-white image that scans on any terminal. Pass this to
+    /// swap them for a light-on-dark code. In the bitmap modes it swaps the two
+    /// colors too.
     #[arg(short = 'i', long = "invert", help_heading = "Rendering")]
     pub invert: bool,
 
@@ -308,7 +308,7 @@ fn render_all(cfg: &Config, codes: &[Symbol], out: &mut dyn std::io::Write) -> s
             }
             RenderMode::Compact => {
                 let frame = crate::render::build_ink(symbol, cfg.border, cfg.invert, cfg.glyphs);
-                crate::render::render(&frame, cfg.glyphs, out)?;
+                crate::render::render_on_field(&frame, cfg.glyphs, cfg.invert, out)?;
             }
             RenderMode::Ansi => {
                 // ANSI draws one module per two spaces and ignores the glyph set,
@@ -316,7 +316,7 @@ fn render_all(cfg: &Config, codes: &[Symbol], out: &mut dyn std::io::Write) -> s
                 // independent of `--glyphs` instead of shifting with it.
                 let frame =
                     crate::render::build_ink(symbol, cfg.border, cfg.invert, GlyphSet::Half);
-                crate::render::render_ansi(&frame, out)?;
+                crate::render::render_ansi(&frame, cfg.invert, out)?;
             }
         }
         if total > 1 && index + 1 < total {

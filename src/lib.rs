@@ -3,7 +3,7 @@
 //! # Pipeline
 //!
 //! ```text
-//! argv / stdin -> input::resolve -> encode::encode_multi -> render::build_ink -> render::render -> stdout
+//! argv / stdin -> input::resolve -> encode::encode_multi -> render::build_ink -> render::render_on_field -> stdout
 //! ```
 //!
 //! # Layering

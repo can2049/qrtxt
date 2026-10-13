@@ -214,6 +214,24 @@ fn auto_falls_back_to_text_without_a_terminal() {
 }
 
 #[test]
+fn text_output_carries_an_explicit_colour_context() {
+    // The block glyphs are wrapped so dark modules read black on a white field,
+    // independent of the terminal's own colours (so the quiet zone stays light
+    // even on a black terminal).
+    let output = stdout(&["hello"]);
+    assert!(output.starts_with("\x1b[30;107m"), "{output:?}");
+    assert!(output.contains("\x1b[0m"), "{output:?}");
+}
+
+#[test]
+fn ansi_output_carries_an_explicit_colour_context() {
+    let output = stdout(&["--mode", "ansi", "hello"]);
+    assert!(output.contains("\x1b[40m"), "{output:?}");
+    assert!(output.contains("\x1b[107m"), "{output:?}");
+    assert!(output.contains("\x1b[0m"), "{output:?}");
+}
+
+#[test]
 fn unknown_mode_exits_two() {
     qrtxt()
         .args(["--mode", "dense", "hello"])
