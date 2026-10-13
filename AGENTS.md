@@ -22,6 +22,12 @@ terminal text. It is a library (`src/lib.rs`) plus a thin binary (`src/main.rs`)
   before Sixel), so a piped or redirected run always yields text. Both protocols are asked
   in ONE round trip (`probe.rs`) — they share one `/dev/tty` stream, so never probe them
   from separate threads.
+- The character renderers (`text`/`ansi`) set explicit colours, so the code is a
+  self-contained dark-on-white image with a white quiet zone whatever the terminal's own
+  colours are; a black-background terminal would otherwise merge the quiet zone with the
+  dark modules. `render_on_field` wraps the block glyphs and resets the colour before every
+  newline, so the background cannot stretch across the rest of the row. `--invert` swaps the
+  two colours. Do not revert to drawing the light modules in the terminal foreground.
 - Non-ASCII payloads are prefixed with a UTF-8 ECI, and Kanji-mode segments are force-
   downgraded to bytes (`src/encode.rs`). This stops scanners from decoding UTF-8 CJK as
   Shift-JIS. Do not remove it; it is covered by dedicated tests.
