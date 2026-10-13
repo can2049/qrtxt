@@ -8,7 +8,8 @@
 [![crates.io](https://img.shields.io/crates/v/qrtxt.svg)](https://crates.io/crates/qrtxt)
 
 `qrtxt` 读取字符串、文件或管道输入,在标准输出上打印一个普通二维码;用
-`datamatrix` 子命令则打印 Data Matrix(ECC 200)符号。默认它会挑选终端所能提供
+`datamatrix` 子命令则打印 Data Matrix(ECC 200)符号,用 `pdf417` 子命令则打印堆叠式
+PDF417 符号。默认它会挑选终端所能提供
 的最佳渲染方式——终端支持时用 Kitty/Sixel 图形协议绘制清晰的位图,否则回退到
 Unicode 块字符,因此普通 UTF-8 终端始终可用。
 
@@ -34,8 +35,8 @@ $ qrtxt "hi"
 ## 特性
 
 - **三种输入方式** —— 位置参数字面量、文件(`--file`)、标准输入。
-- **两种条码格式** —— 各对应一个子命令:`qr`(普通二维码)与 `datamatrix`(Data Matrix(ECC 200)符号)。
-- **精确纠错等级** —— `L`、`M`、`Q`、`H`,不做自动升档(仅 `qr` 子命令有效;Data Matrix 的纠错由符号尺寸固定,因此 `datamatrix` 没有该选项)。
+- **三种条码格式** —— 各对应一个子命令:`qr`(普通二维码)、`datamatrix`(Data Matrix(ECC 200)符号)与 `pdf417`(堆叠式 PDF417 符号)。
+- **按格式区分的纠错等级** —— `qr` 取 `L`、`M`、`Q`、`H`(不做自动升档),`pdf417` 取其数字等级 `0`–`8`;Data Matrix 的纠错由符号尺寸固定,因此 `datamatrix` 没有该选项。
 - **五种渲染模式** —— `--mode auto`(默认)挑选终端的最佳渲染方式:支持时用
   Kitty/Sixel 图形协议绘制清晰位图,否则回退到 Unicode 块字符;也可用 `text`、
   `ansi`、`kitty`、`sixel` 强制指定。位图比块字符更小更清晰,`ansi` 覆盖不支持块
@@ -81,13 +82,14 @@ qrtxt <COMMAND> [OPTIONS] [DATA]
 命令:
   qr          生成普通二维码
   datamatrix  生成 Data Matrix(ECC 200)符号 [别名: dm]
+  pdf417      生成 PDF417 符号 [别名: pdf]
   help        打印帮助或子命令的帮助
 
 选项:
   -h, --help     打印帮助(用 '--help' 查看更详细说明)
   -V, --version  打印版本
 
-下列选项为所有子命令共享;`qr` 额外提供 -e/--error-correction。
+下列选项为所有子命令共享;`qr` 与 `pdf417` 各自额外提供 -e/--error-correction。
 
 输入:
   -f, --file <PATH>       从文件读取 payload
@@ -95,7 +97,8 @@ qrtxt <COMMAND> [OPTIONS] [DATA]
   [DATA]                  字面量 payload;省略时从 --file 或 stdin 读取
 
 编码:
-  -e, --error-correction <LEVEL>  纠错等级: L(约可恢复 7%)、M(15%)、Q(25%)、H(30%),仅 qr [默认: L]
+  -e, --error-correction <LEVEL>  (qr) 纠错等级: L(约可恢复 7%)、M(15%)、Q(25%)、H(30%) [默认: L]
+                                  (pdf417) 纠错等级: 0(冗余最少)到 8(最多) [默认: 2]
   -m, --max-bytes <BYTES>         限制每个符号的负载为 BYTES 字节;会触发拆分(默认: 单个符号自身的上限)
   -c, --chunk <COUNT>             把负载拆分成至少 COUNT 个符号;引导性(默认: 无下限)
 
@@ -111,8 +114,8 @@ Source: https://github.com/can2049/qrtxt
 ```
 
 不带子命令时按 `qr` 处理,因此 `qrtxt "hi"` 与 `cat token.txt | qrtxt` 依旧可用。
-运行 `qrtxt --help` 查看命令列表,`qrtxt qr --help` 或 `qrtxt datamatrix --help` 查看
-各格式的选项,`qrtxt qr -h` 查看简要摘要。
+运行 `qrtxt --help` 查看命令列表,`qrtxt qr --help`、`qrtxt datamatrix --help` 或
+`qrtxt pdf417 --help` 查看各格式的选项,`qrtxt qr -h` 查看简要摘要。
 
 ## 示例
 
@@ -131,6 +134,12 @@ qrtxt qr --file payload.txt
 
 # 输出 Data Matrix(ECC 200)符号,而非 QR 码
 qrtxt datamatrix "https://example.com"
+
+# 输出堆叠式 PDF417 符号
+qrtxt pdf417 "https://example.com"
+
+# 更高的 PDF417 纠错等级(0-8)
+qrtxt pdf417 --error-correction 6 "important payload"
 
 # 清晰的黑白位图(需要支持 Kitty 协议的终端)
 qrtxt qr --mode kitty "https://example.com"
@@ -169,16 +178,20 @@ qrtxt qr --chunk 4 "a-short-but-verifiable-payload"
 
 | 子命令 | 符号 |
 |---|---|
-| `qr`(默认) | 普通二维码;`--error-correction` 生效。 |
+| `qr`(默认) | 普通二维码;`--error-correction` 取 `L`/`M`/`Q`/`H`。 |
 | `datamatrix`(`dm`) | Data Matrix(ECC 200)符号,始终为正方形。 |
+| `pdf417`(`pdf`) | 堆叠式 PDF417 符号;`--error-correction` 取 `0`–`8`。 |
 
 不带子命令时按 `qr` 处理,因此 `qrtxt "hi"` 与 `cat token.txt | qrtxt` 依旧可用。
 Data Matrix 的纠错由符号尺寸固定,因此 `datamatrix` 没有任何编码选项,并会拒绝
 `--error-correction`。
 
 Data Matrix 单个符号能容纳的数据远少于 QR 码(最低纠错等级下约 1555 字节,QR 约
-2953 字节),因此相同内容会拆成更多符号。非 ASCII 文本同样声明 UTF-8 ECI;与 QR 一样,
-不少扫描器对此处理不一致,能只用可打印 ASCII 时就尽量只用。
+2953 字节),因此相同内容会拆成更多符号。PDF417 容量更小——默认等级下约 1068 字节,
+等级 0 约 1075 字节——且其纠错等级与 QR 相反:从 `0` 到 `8` 每升一级,纠错码字数
+大致翻倍,等级越高越健壮但容量越小。非 ASCII 文本同样声明 UTF-8 ECI;与 QR 一样,
+不少扫描器对此处理不一致,能只用可打印 ASCII 时就尽量只用。任何无法表示为 UTF-8
+文本的负载(例如原始二进制)会经 Latin-1 映射编码,从而原样还原字节。
 
 ## 渲染模式
 
@@ -251,11 +264,11 @@ Sixel 的支持探测比 Kitty 弱:它没有握手,`qrtxt` 会发送一次主设
 
 ## 超长内容
 
-单个二维码能容纳的数据有上限(`L` 级约 2953 字节,级别越高越少)。放不下时,`qrtxt`
-会自动把内容均分到多个二维码(无需任何参数),按顺序输出,每个二维码上方带 `QR Code i/N`
-说明。各二维码负载均衡,承载的数据量彼此相近;拆分文本时切点落在字符边界上,因此
-多字节字符不会被拆到两个二维码里。能放进单个二维码的内容仍作为单个二维码输出、
-不带说明。
+单个符号能容纳的数据有上限(`L` 级二维码约 2953 字节,级别越高越少)。放不下时,`qrtxt`
+会自动把内容均分到多个符号(无需任何参数),按顺序输出,每个符号上方带 `QR Code i/N`
+(或 `Data Matrix i/N`、`PDF417 i/N`)说明。各符号负载均衡,承载的数据量彼此相近;
+拆分文本时切点落在字符边界上,因此多字节字符不会被拆到两个符号里。能放进单个符号的
+内容仍作为单个符号输出、不带说明。
 
 用 `--max-bytes BYTES` 可限制每个二维码的负载字节数(便于生成更小、更易扫的二维码)。
 该选项会触发拆分:即使整体能放进一个二维码,也会拆开以保证每个二维码不超过上限。
@@ -286,7 +299,8 @@ argv / stdin -> input::resolve -> encode::encode_multi -> render::build_ink -> r
 
 - `cli` 负责参数解析(`parse`)与流程编排(`run` / `run_with`)。
 - `input`、`encode`、`render` 是纯逻辑,不依赖 `clap`。
-- `encode` 按符号类型包装对应的条码库(QR 用 `qrcode`,Data Matrix 用 `datamatrix`),
+- `encode` 按符号类型包装对应的条码库(QR 用 `qrcode`,Data Matrix 用 `datamatrix`,
+  PDF417 用 `rxing`),
   并产出与符号类型无关的 `Symbol`(明暗模块网格),因此只有 `encode` 依赖条码库。
 - `kitty` 与 `sixel` 存放底层协议封帧,供 `cli`(终端探测)与 `render`(位图传输)共用。
 - `types` 存放共享值类型(含 `Symbol`);`error` 把失败映射为退出码。
@@ -297,7 +311,7 @@ argv / stdin -> input::resolve -> encode::encode_multi -> render::build_ink -> r
 `render_sixel` 跳过该网格,直接通过 Kitty 或 Sixel 协议输出黑白位图。`render` 自身按策略
 拆成 `frame`/`text`/`ansi`/`bitmap` 子模块,由 `render_all` 统一分发。round-trip 测试会
 先剥掉颜色转义、把输出还原成模块网格、再解码——QR 用 `rqrr`,Data Matrix 用
-`datamatrix` crate——以证明打印出来的东西仍然可扫。
+`datamatrix` crate,PDF417 用 `rxing`——以证明打印出来的东西仍然可扫。
 
 ## 许可
 

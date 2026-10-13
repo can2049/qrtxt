@@ -42,7 +42,17 @@ fn inject_default_subcommand(mut args: Vec<OsString>) -> Vec<OsString> {
     let first = args.get(1).and_then(|arg| arg.to_str());
     let keep = matches!(
         first,
-        Some("qr" | "datamatrix" | "dm" | "help" | "-h" | "--help" | "-V" | "--version")
+        Some(
+            "qr" | "datamatrix"
+                | "dm"
+                | "pdf417"
+                | "pdf"
+                | "help"
+                | "-h"
+                | "--help"
+                | "-V"
+                | "--version"
+        )
     );
     if !keep {
         args.insert(1, OsString::from("qr"));
@@ -128,6 +138,8 @@ mod tests {
             &["qrtxt", "qr", "hello"][..],
             &["qrtxt", "datamatrix", "x"][..],
             &["qrtxt", "dm", "x"][..],
+            &["qrtxt", "pdf417", "x"][..],
+            &["qrtxt", "pdf", "x"][..],
             &["qrtxt", "help"][..],
         ] {
             let expected: Vec<String> = items.iter().map(|arg| arg.to_string()).collect();

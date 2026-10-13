@@ -265,6 +265,8 @@ fn short_help_lists_the_symbology_subcommands() {
     assert!(help.contains("Encode a QR code"), "{help}");
     assert!(help.contains("Data Matrix"), "{help}");
     assert!(help.contains("dm"), "{help}"); // the datamatrix alias
+    assert!(help.contains("PDF417"), "{help}");
+    assert!(help.contains("pdf"), "{help}"); // the pdf417 alias
 }
 
 #[test]
@@ -304,6 +306,49 @@ fn datamatrix_splits_with_its_own_caption() {
         "missing datamatrix caption"
     );
     assert!(!text.contains("QR Code "), "leaked a QR caption");
+}
+
+#[test]
+fn pdf417_subcommand_prints_a_symbol() {
+    let output = stdout(&["pdf417", "hello"]);
+    assert!(output.chars().any(is_block), "no block glyphs in output");
+    assert!(output.lines().count() > 4, "output too short: {output:?}");
+}
+
+#[test]
+fn pdf417_alias_matches_the_full_name() {
+    assert_eq!(stdout(&["pdf", "hello"]), stdout(&["pdf417", "hello"]));
+}
+
+#[test]
+fn pdf417_splits_with_its_own_caption() {
+    let payload = "a".repeat(4000);
+    let text = stdout(&["pdf417", &payload]);
+    assert!(text.contains("PDF417 1/"), "missing pdf417 caption");
+    assert!(!text.contains("QR Code "), "leaked a QR caption");
+    assert!(
+        !text.contains("Data Matrix "),
+        "leaked a Data Matrix caption"
+    );
+}
+
+#[test]
+fn pdf417_short_help_lists_the_error_levels() {
+    let help = stdout(&["pdf417", "-h"]);
+    assert!(help.contains("--error-correction"), "{help}");
+    assert!(help.contains("0 (least redundancy"), "{help}");
+    assert!(help.contains("[default: 2]"), "{help}");
+}
+
+#[test]
+fn pdf417_rejects_out_of_range_or_letter_error_correction() {
+    for level in ["9", "H"] {
+        qrtxt()
+            .args(["pdf417", "-e", level, "hello"])
+            .assert()
+            .failure()
+            .code(2);
+    }
 }
 
 #[test]

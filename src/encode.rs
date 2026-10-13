@@ -9,9 +9,11 @@ use qrcode::bits::Bits;
 use qrcode::optimize::{Parser, Segment};
 use qrcode::types::{Mode, QrError};
 use qrcode::{Color, EcLevel, QrCode, Version};
+use rxing::common::CharacterSet;
+use rxing::pdf417::encoder::PDF417;
 
 use crate::error::AppError;
-use crate::types::{Ec, EncodeOptions, Symbol};
+use crate::types::{Ec, EncodeOptions, Pdf417Ec, Symbol};
 
 /// ECI designator for UTF-8 (ISO/IEC 18004 assignment 26).
 const UTF8_ECI: u32 = 26;
@@ -129,6 +131,15 @@ const QR_MAX_BYTES: usize = 7089;
 /// numeric): the bound for the split search (FR-2.6).
 const DATAMATRIX_MAX_BYTES: usize = 3116;
 
+/// Upper bound on the bytes a single PDF417 symbol can hold: the bound for the
+/// split search.
+///
+/// PDF417's densest mode is numeric compaction (about 2.9 bytes per data
+/// codeword), and the most data codewords any symbol carries is 925 (level 0),
+/// so no payload can exceed roughly 2710 bytes. This rounds that up: being an
+/// over-estimate only costs a few extra probes in [`max_prefix_fitting`].
+const PDF417_MAX_BYTES: usize = 2800;
+
 /// QR codec: the `qrcode` crate at the exact error level (`qrcode` never boosts
 /// it, matching qrpipe's `boost_error=false`).
 struct QrCodec {
@@ -211,6 +222,86 @@ fn data_matrix_symbol(data: &[u8]) -> Result<Symbol, datamatrix::data::DataEncod
     Ok(Symbol::new(width, height, dark))
 }
 
+/// PDF417 codec: the `rxing` crate's low-level encoder.
+///
+/// Unlike QR and Data Matrix, the PDF417 encoder takes *text*, not bytes, so the
+/// payload is mapped through Latin-1 when it is not valid UTF-8 and declared as
+/// UTF-8 when it is non-ASCII text (see [`pdf417_symbol`]); both paths round-trip
+/// the original bytes. The error-correction level is a number from 0 to 8.
+struct Pdf417Codec {
+    ec: Pdf417Ec,
+}
+
+impl Codec for Pdf417Codec {
+    fn encode(&self, data: &[u8]) -> Result<Symbol, AppError> {
+        pdf417_symbol(data, self.ec).map_err(|()| {
+            let max = max_prefix_fitting(self, data);
+            AppError::Input(format!(
+                "input too long: {} bytes (maximum {} bytes in a PDF417 symbol at error-correction level {})",
+                data.len(),
+                max,
+                self.ec.get()
+            ))
+        })
+    }
+
+    fn fits(&self, data: &[u8]) -> bool {
+        pdf417_symbol(data, self.ec).is_ok()
+    }
+
+    fn capacity(&self) -> usize {
+        PDF417_MAX_BYTES
+    }
+}
+
+/// Encode `data` into a single PDF417 symbol as a neutral [`Symbol`].
+///
+/// The `rxing` encoder accepts a string rather than raw bytes, so a payload that
+/// is not valid UTF-8 is mapped through Latin-1 (byte value to code point
+/// `U+0000..U+00FF`) and encoded in the default ISO-8859-1 charset, which returns
+/// the exact bytes on decode. Valid UTF-8 text outside ASCII is instead declared
+/// with a UTF-8 ECI, so scanners do not fall back to a legacy charset — the same
+/// reasoning as the QR encoder. Fails only for an empty payload or one too large
+/// for a single symbol.
+fn pdf417_symbol(data: &[u8], ec: Pdf417Ec) -> Result<Symbol, ()> {
+    let (text, utf8_eci): (std::borrow::Cow<'_, str>, bool) = match std::str::from_utf8(data) {
+        Ok(text) if !text.is_ascii() => (std::borrow::Cow::Borrowed(text), true),
+        Ok(text) => (std::borrow::Cow::Borrowed(text), false),
+        Err(_) => (
+            data.iter()
+                .map(|&byte| byte as char)
+                .collect::<String>()
+                .into(),
+            false,
+        ),
+    };
+    let mut encoder = PDF417::new();
+    if utf8_eci {
+        encoder.setEncoding(Some(CharacterSet::UTF8));
+    }
+    encoder
+        .generateBarcodeLogicWithAutoECI(&text, u32::from(ec.get()), utf8_eci)
+        .map_err(|_| ())?;
+    let matrix = encoder.getBarcodeMatrix().as_ref().ok_or(())?.getMatrix();
+    Ok(matrix_to_symbol(&matrix))
+}
+
+/// Convert `rxing`'s PDF417 bit matrix into the neutral [`Symbol`] grid.
+///
+/// The matrix is row-major with `1` marking a bar, but the crate stores it
+/// bottom-up, so the rows are reversed to hand the renderers an upright symbol.
+fn matrix_to_symbol(matrix: &[Vec<u8>]) -> Symbol {
+    let height = matrix.len();
+    let width = matrix.first().map_or(0, Vec::len);
+    let mut dark = vec![false; width * height];
+    for (y, row) in matrix.iter().rev().enumerate() {
+        for (x, &value) in row.iter().enumerate() {
+            dark[y * width + x] = value == 1;
+        }
+    }
+    Symbol::new(width, height, dark)
+}
+
 /// Encode `data` into an ordinary QR code at the exact error level.
 ///
 /// `qrcode` never boosts the error level, matching qrpipe's `boost_error=false`.
@@ -236,12 +327,17 @@ pub fn encode_multi(
 ) -> Result<Vec<Symbol>, AppError> {
     let qr;
     let datamatrix = DataMatrixCodec;
+    let pdf417;
     let codec: &dyn Codec = match encode {
         EncodeOptions::Qr { ec } => {
             qr = QrCodec { ec: *ec };
             &qr
         }
         EncodeOptions::DataMatrix => &datamatrix,
+        EncodeOptions::Pdf417 { ec } => {
+            pdf417 = Pdf417Codec { ec: *ec };
+            &pdf417
+        }
     };
     split_chunks_with(codec, data, max_bytes, min_chunks)
         .into_iter()
@@ -473,6 +569,73 @@ mod tests {
         };
         assert!(message.contains("Data Matrix"), "{message}");
         assert!(message.contains("4000"), "{message}");
+    }
+
+    /// PDF417 options at error-correction level `ec`, for the tests.
+    fn pdf417(ec: u8) -> EncodeOptions {
+        EncodeOptions::Pdf417 { ec: Pdf417Ec(ec) }
+    }
+
+    #[test]
+    fn pdf417_encodes_a_rectangular_symbol() {
+        let symbols = encode_multi(b"hello", &pdf417(2), None, None).unwrap();
+        assert_eq!(symbols.len(), 1);
+        assert!(symbols[0].width() > 0 && symbols[0].height() > 0);
+        assert_ne!(
+            symbols[0].width(),
+            symbols[0].height(),
+            "PDF417 is not square"
+        );
+    }
+
+    #[test]
+    fn pdf417_encodes_non_ascii_text_and_raw_bytes() {
+        // Non-ASCII UTF-8 is declared with a UTF-8 ECI; non-UTF-8 bytes go through
+        // the Latin-1 mapping. Both must encode without error.
+        for data in [
+            "你好，世界".as_bytes(),
+            "参数 --file 文件".as_bytes(),
+            &[0xff, 0x00, 0x80, 0x41, 0x42],
+        ] {
+            assert!(
+                encode_multi(data, &pdf417(2), None, None).is_ok(),
+                "failed for {data:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn pdf417_splits_an_oversized_payload() {
+        let codes = encode_multi(&vec![b'a'; 4000], &pdf417(2), None, None).unwrap();
+        assert!(codes.len() > 1, "expected more than one symbol");
+    }
+
+    #[test]
+    fn pdf417_split_covers_the_payload() {
+        let data: Vec<u8> = (0..4000u32).map(|i| b'a' + (i % 26) as u8).collect();
+        let chunks = split_chunks_with(&Pdf417Codec { ec: Pdf417Ec(2) }, &data, None, None);
+        assert!(chunks.len() > 1, "expected a split");
+        assert_eq!(chunks.concat(), data);
+    }
+
+    #[test]
+    fn pdf417_reports_the_ceiling_for_an_oversized_input() {
+        // High bytes force byte compaction, the least dense mode, so the ceiling
+        // sits well below the numeric bound.
+        let huge = vec![0xffu8; 4000];
+        let Err(AppError::Input(message)) = Pdf417Codec { ec: Pdf417Ec(2) }.encode(&huge) else {
+            panic!("expected an input error");
+        };
+        assert!(message.contains("PDF417"), "{message}");
+        assert!(message.contains("4000"), "{message}");
+        assert!(message.contains("level 2"), "{message}");
+    }
+
+    #[test]
+    fn pdf417_higher_levels_hold_less_data() {
+        let data = vec![b'a'; 1500];
+        assert!(Pdf417Codec { ec: Pdf417Ec(0) }.fits(&data), "level 0");
+        assert!(!Pdf417Codec { ec: Pdf417Ec(8) }.fits(&data), "level 8");
     }
 
     #[test]

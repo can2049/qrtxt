@@ -16,11 +16,25 @@ categories = ["command-line-utilities", "encoding"]
 clap = { version = "4.6.7", features = ["derive"] }
 datamatrix = "0.3.3"
 qrcode = { version = "0.14.1", default-features = false }
+# PDF417 encoding only; the decoder is pulled in by --dev-dependencies for the
+# round-trip tests, so the shipped binary never carries it.
+rxing = { version = "0.9.3", default-features = false, features = [
+    "pdf417",
+    "encoders",
+    "encoding_rs",
+] }
 rustix = { version = "1", features = ["termios"] }
 
 [dev-dependencies]
 assert_cmd = "2.2.2"
 datamatrix = "0.3.3"
+# The round-trip tests decode the rendered PDF417 with rxing; `decoders` is kept
+# out of the normal dependency tree so the release binary stays lean.
+rxing = { version = "0.9.3", default-features = false, features = [
+    "pdf417",
+    "decoders",
+    "encoding_rs",
+] }
 predicates = "3.1.4"
 rqrr = "0.11.0"
 
