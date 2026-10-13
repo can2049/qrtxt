@@ -118,27 +118,41 @@ impl FromStr for Mode {
 
 /// The barcode symbology to draw (FR-2.7).
 ///
-/// Selected independently of [`Mode`]: `--mode` picks how a symbol is rendered,
-/// `--format` picks which symbol is produced.
+/// Chosen by the command-line subcommand (`qr` / `datamatrix`) and independent of
+/// [`Mode`]: `--mode` picks how a symbol is rendered, the subcommand picks which
+/// symbol is produced. Kept as a value so renderers can caption multi-symbol runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format {
-    /// An ordinary QR code (the default); `--format` accepts `"qr code"` or its
-    /// `"qr"` alias.
+    /// An ordinary QR code.
     Qr,
     /// A Data Matrix (ECC 200) symbol.
     DataMatrix,
 }
 
-impl FromStr for Format {
-    type Err = String;
+/// Symbol-encoding parameters, one variant per [`Format`] (FR-2.7).
+///
+/// Each symbology owns its own options: a QR code takes an error-correction
+/// level, while a Data Matrix has none (its correction is fixed by the symbol
+/// size). Keeping them here, rather than as flat fields on [`Config`], lets a
+/// format carry parameters the others do not understand.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EncodeOptions {
+    /// QR code parameters.
+    Qr {
+        /// Requested error-correction level.
+        ec: Ec,
+    },
+    /// Data Matrix (ECC 200) parameters: none are user-selectable.
+    DataMatrix,
+}
 
-    /// Parses a case-insensitive format name (`"qr code"`, its `"qr"` alias,
-    /// `"datamatrix"`, `"dm"`).
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_ascii_lowercase().as_str() {
-            "qr code" | "qr" => Ok(Format::Qr),
-            "datamatrix" | "dm" => Ok(Format::DataMatrix),
-            _ => Err(format!("invalid format: {s} (expected qr code|datamatrix)")),
+impl EncodeOptions {
+    /// The [`Format`] these options encode.
+    #[must_use]
+    pub fn format(&self) -> Format {
+        match self {
+            EncodeOptions::Qr { .. } => Format::Qr,
+            EncodeOptions::DataMatrix => Format::DataMatrix,
         }
     }
 }
@@ -211,10 +225,8 @@ pub enum InputSpec {
 pub struct Config {
     /// Where the payload comes from.
     pub input: InputSpec,
-    /// Requested error-correction level.
-    pub ec: Ec,
-    /// Barcode symbology to draw.
-    pub format: Format,
+    /// Symbol-encoding parameters, chosen by the format.
+    pub encode: EncodeOptions,
     /// Quiet-zone width, in modules.
     pub border: u32,
     /// Swap the colors: draw light-on-dark instead of dark-on-light.
@@ -225,9 +237,9 @@ pub struct Config {
     pub mode: RenderMode,
     /// Keep one trailing newline instead of stripping it.
     pub preserve_newline: bool,
-    /// Cap on the payload bytes per QR code; `None` uses the symbol's own limit.
+    /// Cap on the payload bytes per symbol; `None` uses the symbol's own limit.
     pub max_bytes: Option<usize>,
-    /// Advisory floor on the number of QR codes to split across; `None` means no
+    /// Advisory floor on the number of symbols to split across; `None` means no
     /// floor beyond what the byte cap requires.
     pub min_chunks: Option<usize>,
 }
@@ -273,17 +285,8 @@ mod tests {
     }
 
     #[test]
-    fn format_parses_case_insensitively() {
-        assert_eq!("qr code".parse::<Format>(), Ok(Format::Qr));
-        assert_eq!("qr".parse::<Format>(), Ok(Format::Qr));
-        assert_eq!("QR Code".parse::<Format>(), Ok(Format::Qr));
-        assert_eq!("DataMatrix".parse::<Format>(), Ok(Format::DataMatrix));
-        assert_eq!("DM".parse::<Format>(), Ok(Format::DataMatrix));
-    }
-
-    #[test]
-    fn format_rejects_unknown() {
-        assert!("pdf417".parse::<Format>().is_err());
-        assert!("".parse::<Format>().is_err());
+    fn encode_options_report_their_format() {
+        assert_eq!(EncodeOptions::Qr { ec: Ec::M }.format(), Format::Qr);
+        assert_eq!(EncodeOptions::DataMatrix.format(), Format::DataMatrix);
     }
 }

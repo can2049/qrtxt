@@ -7,8 +7,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![crates.io](https://img.shields.io/crates/v/qrtxt.svg)](https://crates.io/crates/qrtxt)
 
-`qrtxt` 读取字符串、文件或管道输入,在标准输出上打印一个普通二维码;加上
-`--format datamatrix` 则打印 Data Matrix(ECC 200)符号。默认它会挑选终端所能提供
+`qrtxt` 读取字符串、文件或管道输入,在标准输出上打印一个普通二维码;用
+`datamatrix` 子命令则打印 Data Matrix(ECC 200)符号。默认它会挑选终端所能提供
 的最佳渲染方式——终端支持时用 Kitty/Sixel 图形协议绘制清晰的位图,否则回退到
 Unicode 块字符,因此普通 UTF-8 终端始终可用。
 
@@ -34,8 +34,8 @@ $ qrtxt "hi"
 ## 特性
 
 - **三种输入方式** —— 位置参数字面量、文件(`--file`)、标准输入。
-- **两种条码格式** —— QR 码(默认)与 Data Matrix(ECC 200)符号,用 `--format` 选择。
-- **精确纠错等级** —— `L`、`M`、`Q`、`H`,不做自动升档(仅 QR 有效;Data Matrix 的纠错由符号尺寸固定)。
+- **两种条码格式** —— 各对应一个子命令:`qr`(普通二维码)与 `datamatrix`(Data Matrix(ECC 200)符号)。
+- **精确纠错等级** —— `L`、`M`、`Q`、`H`,不做自动升档(仅 `qr` 子命令有效;Data Matrix 的纠错由符号尺寸固定,因此 `datamatrix` 没有该选项)。
 - **五种渲染模式** —— `--mode auto`(默认)挑选终端的最佳渲染方式:支持时用
   Kitty/Sixel 图形协议绘制清晰位图,否则回退到 Unicode 块字符;也可用 `text`、
   `ansi`、`kitty`、`sixel` 强制指定。位图比块字符更小更清晰,`ansi` 覆盖不支持块
@@ -76,11 +76,18 @@ cargo install --path .
 ## 用法
 
 ```text
-qrtxt [OPTIONS] [DATA]
+qrtxt <COMMAND> [OPTIONS] [DATA]
+
+命令:
+  qr          生成普通二维码
+  datamatrix  生成 Data Matrix(ECC 200)符号 [别名: dm]
+  help        打印帮助或子命令的帮助
 
 选项:
   -h, --help     打印帮助(用 '--help' 查看更详细说明)
   -V, --version  打印版本
+
+下列选项为所有子命令共享;`qr` 额外提供 -e/--error-correction。
 
 输入:
   -f, --file <PATH>       从文件读取 payload
@@ -88,8 +95,7 @@ qrtxt [OPTIONS] [DATA]
   [DATA]                  字面量 payload;省略时从 --file 或 stdin 读取
 
 编码:
-  -e, --error-correction <LEVEL>  纠错等级: L(约可恢复 7%)、M(15%)、Q(25%)、H(30%),仅 QR 有效 [默认: L]
-  -F, --format <FORMAT>           条码格式: qr code (qr) 或 datamatrix (dm) [默认: "qr code"]
+  -e, --error-correction <LEVEL>  纠错等级: L(约可恢复 7%)、M(15%)、Q(25%)、H(30%),仅 qr [默认: L]
   -m, --max-bytes <BYTES>         限制每个符号的负载为 BYTES 字节;会触发拆分(默认: 单个符号自身的上限)
   -c, --chunk <COUNT>             把负载拆分成至少 COUNT 个符号;引导性(默认: 无下限)
 
@@ -104,67 +110,75 @@ qrtxt [OPTIONS] [DATA]
 Source: https://github.com/can2049/qrtxt
 ```
 
-运行 `qrtxt --help` 可查看每个选项的完整说明及其参数的作用(`-h` 只打印简要摘要)。
+不带子命令时按 `qr` 处理,因此 `qrtxt "hi"` 与 `cat token.txt | qrtxt` 依旧可用。
+运行 `qrtxt --help` 查看命令列表,`qrtxt qr --help` 或 `qrtxt datamatrix --help` 查看
+各格式的选项,`qrtxt qr -h` 查看简要摘要。
 
 ## 示例
 
 ```console
-# 字面量字符串
+# 字面量字符串(不带子命令时默认按 qr 处理)
 qrtxt "https://example.com"
+
+# 等价的显式写法
+qrtxt qr "https://example.com"
 
 # 把密钥直接喷到屏幕,全程不落盘
 cat token.txt | qrtxt
 
 # 从文件读取
-qrtxt --file payload.txt
-
-# 清晰的黑白位图(需要支持 Kitty 协议的终端)
-qrtxt --mode kitty "https://example.com"
-
-# 清晰的黑白位图(需要支持 Sixel 协议的终端)
-qrtxt --mode sixel "https://example.com"
+qrtxt qr --file payload.txt
 
 # 输出 Data Matrix(ECC 200)符号,而非 QR 码
-qrtxt --format datamatrix "https://example.com"
+qrtxt datamatrix "https://example.com"
+
+# 清晰的黑白位图(需要支持 Kitty 协议的终端)
+qrtxt qr --mode kitty "https://example.com"
+
+# 清晰的黑白位图(需要支持 Sixel 协议的终端)
+qrtxt qr --mode sixel "https://example.com"
 
 # 强制使用 Unicode 块字符(用于管道,或与位图对照)
-qrtxt --mode text "hello"
+qrtxt qr --mode text "hello"
 
 # 不支持块字符的终端:用 ANSI 转义序列
-qrtxt --mode ansi "hello"
+qrtxt qr --mode ansi "hello"
 
-# 更高的纠错等级
-qrtxt --error-correction H "important payload"
+# 更高的纠错等级(仅 qr)
+qrtxt qr --error-correction H "important payload"
 
 # 更窄静默区
-qrtxt --border 1 "hello"
+qrtxt qr --border 1 "hello"
 
 # 为窄终端选择更高密度
-qrtxt --mode text --glyphs braille "hello"
+qrtxt qr --mode text --glyphs braille "hello"
 
 # 反相:浅底深字,替代默认的白底黑字
-qrtxt --invert "hello"
+qrtxt qr --invert "hello"
 
 # 自动拆分,每个二维码最多 500 字节
-qrtxt --max-bytes 500 --file big.txt
+qrtxt qr --max-bytes 500 --file big.txt
 
 # 拆分成至少 4 个负载均衡的二维码
-qrtxt --chunk 4 "a-short-but-verifiable-payload"
+qrtxt qr --chunk 4 "a-short-but-verifiable-payload"
 ```
 
 ## 条码格式
 
-`--format` 决定生成哪种符号,`--mode`(见下)决定如何绘制。两种格式都支持全部渲染模式。
+子命令决定生成哪种符号,`--mode`(见下)决定如何绘制。所有格式都支持全部渲染模式。
 
-| `--format` | 符号 |
+| 子命令 | 符号 |
 |---|---|
-| `qr code`(`qr`,默认) | 普通二维码;`--error-correction` 生效。 |
+| `qr`(默认) | 普通二维码;`--error-correction` 生效。 |
 | `datamatrix`(`dm`) | Data Matrix(ECC 200)符号,始终为正方形。 |
 
+不带子命令时按 `qr` 处理,因此 `qrtxt "hi"` 与 `cat token.txt | qrtxt` 依旧可用。
+Data Matrix 的纠错由符号尺寸固定,因此 `datamatrix` 没有任何编码选项,并会拒绝
+`--error-correction`。
+
 Data Matrix 单个符号能容纳的数据远少于 QR 码(最低纠错等级下约 1555 字节,QR 约
-2953 字节),因此相同内容会拆成更多符号。它的纠错由符号尺寸固定,`--error-correction`
-对它无效并被忽略。非 ASCII 文本同样声明 UTF-8 ECI;与 QR 一样,不少扫描器对此处理
-不一致,能只用可打印 ASCII 时就尽量只用。
+2953 字节),因此相同内容会拆成更多符号。非 ASCII 文本同样声明 UTF-8 ECI;与 QR 一样,
+不少扫描器对此处理不一致,能只用可打印 ASCII 时就尽量只用。
 
 ## 渲染模式
 

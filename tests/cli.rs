@@ -173,7 +173,7 @@ fn version_and_help_are_available() {
 
 #[test]
 fn short_help_documents_the_glyph_letters() {
-    let help = stdout(&["-h"]);
+    let help = stdout(&["qr", "-h"]);
     assert!(help.contains("half (h"), "{help}");
     assert!(help.contains("quadrant (q"), "{help}");
     assert!(help.contains("braille (b"), "{help}");
@@ -253,50 +253,52 @@ fn removed_switches_are_rejected() {
 
 #[test]
 fn short_help_lists_the_mode_option_and_its_values() {
-    let help = stdout(&["-h"]);
+    let help = stdout(&["qr", "-h"]);
     assert!(help.contains("--mode"), "{help}");
     assert!(help.contains("kitty"), "{help}");
     assert!(help.contains("sixel"), "{help}");
 }
 
 #[test]
-fn short_help_documents_the_format_names_and_aliases() {
+fn short_help_lists_the_symbology_subcommands() {
     let help = stdout(&["-h"]);
-    assert!(help.contains("qr code (qr)"), "{help}");
-    assert!(help.contains("datamatrix (dm)"), "{help}");
+    assert!(help.contains("Encode a QR code"), "{help}");
+    assert!(help.contains("Data Matrix"), "{help}");
+    assert!(help.contains("dm"), "{help}"); // the datamatrix alias
 }
 
 #[test]
-fn datamatrix_format_prints_a_symbol() {
-    let output = stdout(&["--format", "datamatrix", "hello"]);
+fn top_help_lists_the_common_options() {
+    // The shared options are global, so the top-level help lists them too.
+    let help = stdout(&["-h"]);
+    assert!(help.contains("--file"), "{help}");
+    assert!(help.contains("--mode"), "{help}");
+    assert!(help.contains("--border"), "{help}");
+    assert!(help.contains("--glyphs"), "{help}");
+}
+
+#[test]
+fn datamatrix_subcommand_prints_a_symbol() {
+    let output = stdout(&["datamatrix", "hello"]);
     assert!(output.chars().any(is_block), "no block glyphs in output");
     assert!(output.lines().count() > 4, "output too short: {output:?}");
 }
 
 #[test]
-fn datamatrix_short_format_is_accepted() {
-    assert_eq!(
-        stdout(&["-F", "dm", "hello"]),
-        stdout(&["--format", "datamatrix", "hello"])
-    );
+fn datamatrix_alias_matches_the_full_name() {
+    assert_eq!(stdout(&["dm", "hello"]), stdout(&["datamatrix", "hello"]));
 }
 
 #[test]
-fn qr_format_name_and_alias_are_equivalent() {
-    assert_eq!(
-        stdout(&["--format", "qr code", "hello"]),
-        stdout(&["--format", "qr", "hello"])
-    );
-    assert_eq!(
-        stdout(&["--format", "qr code", "hello"]),
-        stdout(&["hello"])
-    );
+fn qr_subcommand_matches_the_bare_invocation() {
+    // The argv shim injects `qr`, so the flat form and the subcommand agree.
+    assert_eq!(stdout(&["qr", "hello"]), stdout(&["hello"]));
 }
 
 #[test]
 fn datamatrix_splits_with_its_own_caption() {
     let payload = "a".repeat(4000);
-    let text = stdout(&["--format", "datamatrix", "-e", "L", &payload]);
+    let text = stdout(&["datamatrix", &payload]);
     assert!(
         text.contains("Data Matrix 1/"),
         "missing datamatrix caption"
@@ -305,9 +307,10 @@ fn datamatrix_splits_with_its_own_caption() {
 }
 
 #[test]
-fn unknown_format_exits_two() {
+fn removed_format_flag_is_rejected() {
+    // The flat `--format` selector is gone; the subcommand chooses the format.
     qrtxt()
-        .args(["--format", "pdf417", "hello"])
+        .args(["qr", "--format", "dm", "hello"])
         .assert()
         .failure()
         .code(2);

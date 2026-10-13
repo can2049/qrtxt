@@ -523,7 +523,7 @@ fn parse_kitty(buf: &[u8], side: usize, invert: bool) -> Vec<bool> {
 
 #[test]
 fn kitty_bitmap_round_trips() {
-    use qrtxt::types::{Ec, Format};
+    use qrtxt::types::{Ec, EncodeOptions};
 
     let cases: &[(&str, bool)] = &[
         ("hello", false),
@@ -532,8 +532,13 @@ fn kitty_bitmap_round_trips() {
         ("hello", true),
     ];
     for &(payload, invert) in cases {
-        let codes =
-            qrtxt::encode::encode_multi(payload.as_bytes(), Format::Qr, Ec::L, None, None).unwrap();
+        let codes = qrtxt::encode::encode_multi(
+            payload.as_bytes(),
+            &EncodeOptions::Qr { ec: Ec::L },
+            None,
+            None,
+        )
+        .unwrap();
         assert_eq!(codes.len(), 1, "payload should fit one symbol");
         let qr = &codes[0];
 
@@ -550,15 +555,20 @@ fn kitty_bitmap_round_trips() {
 
 #[test]
 fn kitty_multi_code_round_trips() {
-    use qrtxt::types::{Ec, Format};
+    use qrtxt::types::{Ec, EncodeOptions};
 
     // A payload split across several codes: each must render as its own
     // decodable bitmap holding that code's (distinct) segment. Regression: when
     // the codes shared one image id the terminal dropped every bitmap but the
     // last, so earlier codes appeared unrendered.
     let payload: String = (0..600).map(|i| (b'a' + (i % 26) as u8) as char).collect();
-    let codes =
-        qrtxt::encode::encode_multi(payload.as_bytes(), Format::Qr, Ec::L, None, Some(3)).unwrap();
+    let codes = qrtxt::encode::encode_multi(
+        payload.as_bytes(),
+        &EncodeOptions::Qr { ec: Ec::L },
+        None,
+        Some(3),
+    )
+    .unwrap();
     assert!(codes.len() > 1, "payload should split into several codes");
 
     let mut assembled = String::new();
@@ -723,7 +733,7 @@ fn parse_sixel(buf: &[u8], side: usize, invert: bool) -> Vec<bool> {
 
 #[test]
 fn sixel_bitmap_round_trips() {
-    use qrtxt::types::{Ec, Format};
+    use qrtxt::types::{Ec, EncodeOptions};
 
     let cases: &[(&str, bool)] = &[
         ("hello", false),
@@ -732,8 +742,13 @@ fn sixel_bitmap_round_trips() {
         ("hello", true),
     ];
     for &(payload, invert) in cases {
-        let codes =
-            qrtxt::encode::encode_multi(payload.as_bytes(), Format::Qr, Ec::L, None, None).unwrap();
+        let codes = qrtxt::encode::encode_multi(
+            payload.as_bytes(),
+            &EncodeOptions::Qr { ec: Ec::L },
+            None,
+            None,
+        )
+        .unwrap();
         assert_eq!(codes.len(), 1, "payload should fit one symbol");
         let qr = &codes[0];
 
@@ -750,13 +765,18 @@ fn sixel_bitmap_round_trips() {
 
 #[test]
 fn sixel_multi_code_round_trips() {
-    use qrtxt::types::{Ec, Format};
+    use qrtxt::types::{Ec, EncodeOptions};
 
     // A payload split across several codes: each Sixel sequence must hold that
     // code's segment and, in order, reproduce the whole payload.
     let payload: String = (0..600).map(|i| (b'a' + (i % 26) as u8) as char).collect();
-    let codes =
-        qrtxt::encode::encode_multi(payload.as_bytes(), Format::Qr, Ec::L, None, Some(3)).unwrap();
+    let codes = qrtxt::encode::encode_multi(
+        payload.as_bytes(),
+        &EncodeOptions::Qr { ec: Ec::L },
+        None,
+        Some(3),
+    )
+    .unwrap();
     assert!(codes.len() > 1, "payload should split into several codes");
 
     let mut assembled = String::new();
@@ -779,7 +799,7 @@ fn sixel_multi_code_round_trips() {
 /// width with the quiet zone removed (and rounded down to even, undoing any
 /// glyph-tile padding).
 fn datamatrix_dark_grid(payload: &str, glyph: &str, invert: bool) -> (usize, Vec<bool>) {
-    let mut args = vec!["--format", "datamatrix", "--glyphs", glyph];
+    let mut args = vec!["datamatrix", "--glyphs", glyph];
     if invert {
         args.push("--invert");
     }
@@ -844,7 +864,7 @@ fn datamatrix_inverted_round_trips() {
 
 #[test]
 fn datamatrix_grid_matches_the_encoder() {
-    use qrtxt::types::{Ec, Format};
+    use qrtxt::types::EncodeOptions;
 
     // The crate decoder refuses ECI-tagged symbols as raw bytes, so UTF-8 is
     // verified by reproducing the encoder's own symbol through the CLI and
@@ -854,8 +874,7 @@ fn datamatrix_grid_matches_the_encoder() {
             let (size, dark) = datamatrix_dark_grid(payload, glyph, invert);
             let symbols = qrtxt::encode::encode_multi(
                 payload.as_bytes(),
-                Format::DataMatrix,
-                Ec::L,
+                &EncodeOptions::DataMatrix,
                 None,
                 None,
             )
@@ -879,7 +898,7 @@ fn datamatrix_grid_matches_the_encoder() {
 #[test]
 fn datamatrix_split_round_trips_in_order() {
     let payload = "a".repeat(4000);
-    let text = render(&["--format", "datamatrix", "-e", "L", &payload]);
+    let text = render(&["datamatrix", &payload]);
     let blocks = multi_blocks(&text);
     assert!(blocks.len() > 1, "expected the payload to split");
     let mut assembled = String::new();
@@ -894,7 +913,7 @@ fn datamatrix_split_round_trips_in_order() {
 
 #[test]
 fn datamatrix_cjk_round_trips() {
-    use qrtxt::types::{Ec, Format};
+    use qrtxt::types::EncodeOptions;
 
     // `DataMatrix::decode` refuses ECI-tagged symbols as raw bytes, so CJK is
     // verified in two composing halves: the crate's own symbol decodes back to
@@ -905,7 +924,7 @@ fn datamatrix_cjk_round_trips() {
         assert_eq!(&decoded, text, "crate round trip for {text:?}");
 
         let symbols =
-            qrtxt::encode::encode_multi(text.as_bytes(), Format::DataMatrix, Ec::L, None, None)
+            qrtxt::encode::encode_multi(text.as_bytes(), &EncodeOptions::DataMatrix, None, None)
                 .unwrap();
         assert_eq!(symbols.len(), 1, "payload should fit one symbol: {text:?}");
         let symbol = &symbols[0];
@@ -940,7 +959,7 @@ fn datamatrix_symbol_sizes_round_trip() {
 fn datamatrix_max_bytes_split_round_trips_in_order() {
     // --max-bytes caps each symbol and forces a split.
     let payload = "a".repeat(600);
-    let text = render(&["--format", "datamatrix", "--max-bytes", "100", &payload]);
+    let text = render(&["datamatrix", "--max-bytes", "100", &payload]);
     let blocks = multi_blocks(&text);
     assert_eq!(blocks.len(), 6, "600 bytes at 100 bytes per symbol");
     let mut assembled = String::new();

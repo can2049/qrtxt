@@ -110,7 +110,12 @@ pub fn render_all(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::Ec;
+    use crate::types::{Ec, EncodeOptions};
+
+    /// QR encode options at error level `ec`, for the tests.
+    fn qr(ec: Ec) -> EncodeOptions {
+        EncodeOptions::Qr { ec }
+    }
 
     /// Default drawing options matching the CLI defaults (border 4, no invert,
     /// half blocks).
@@ -124,8 +129,7 @@ mod tests {
 
     #[test]
     fn render_all_captions_multiple_codes() {
-        let codes =
-            crate::encode::encode_multi(&vec![b'x'; 4000], Format::Qr, Ec::L, None, None).unwrap();
+        let codes = crate::encode::encode_multi(&vec![b'x'; 4000], &qr(Ec::L), None, None).unwrap();
         assert!(codes.len() > 1);
         let mut out = Vec::new();
         render_all(&codes, Format::Qr, RenderMode::Compact, options(), &mut out).unwrap();
@@ -139,7 +143,7 @@ mod tests {
 
     #[test]
     fn render_all_leaves_a_single_code_uncaptioned() {
-        let codes = crate::encode::encode_multi(b"hello", Format::Qr, Ec::L, None, None).unwrap();
+        let codes = crate::encode::encode_multi(b"hello", &qr(Ec::L), None, None).unwrap();
         assert_eq!(codes.len(), 1);
         let mut out = Vec::new();
         render_all(&codes, Format::Qr, RenderMode::Compact, options(), &mut out).unwrap();
@@ -158,7 +162,7 @@ mod tests {
             glyphs: GlyphSet::Braille,
             ..options()
         };
-        let codes = crate::encode::encode_multi(b"hi", Format::Qr, Ec::L, None, None).unwrap();
+        let codes = crate::encode::encode_multi(b"hi", &qr(Ec::L), None, None).unwrap();
         let draw = |opts: RenderOptions| {
             let mut out = Vec::new();
             render_all(&codes, Format::Qr, RenderMode::Ansi, opts, &mut out).unwrap();
@@ -173,8 +177,7 @@ mod tests {
         // replaced every bitmap but the last and the earlier codes looked
         // unrendered. Each code must now be transmitted as its own image with a
         // distinct id, in order.
-        let codes =
-            crate::encode::encode_multi(&vec![b'x'; 6000], Format::Qr, Ec::L, None, None).unwrap();
+        let codes = crate::encode::encode_multi(&vec![b'x'; 6000], &qr(Ec::L), None, None).unwrap();
         assert!(codes.len() >= 3, "payload should split into several codes");
 
         let mut out = Vec::new();
@@ -211,7 +214,7 @@ mod tests {
     #[test]
     fn render_all_labels_datamatrix_captions() {
         let codes =
-            crate::encode::encode_multi(&vec![b'x'; 4000], Format::DataMatrix, Ec::L, None, None)
+            crate::encode::encode_multi(&vec![b'x'; 4000], &EncodeOptions::DataMatrix, None, None)
                 .unwrap();
         assert!(codes.len() > 1, "expected a split");
         let mut out = Vec::new();
@@ -230,8 +233,7 @@ mod tests {
 
     #[test]
     fn render_all_sixel_renders_one_sequence_per_code() {
-        let codes =
-            crate::encode::encode_multi(&vec![b'x'; 6000], Format::Qr, Ec::L, None, None).unwrap();
+        let codes = crate::encode::encode_multi(&vec![b'x'; 6000], &qr(Ec::L), None, None).unwrap();
         assert!(codes.len() >= 3, "payload should split into several codes");
 
         let mut out = Vec::new();

@@ -7,11 +7,11 @@ Turn text into a QR code, right in your terminal.
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![crates.io](https://img.shields.io/crates/v/qrtxt.svg)](https://crates.io/crates/qrtxt)
 
-`qrtxt` reads a string, a file, or piped input and prints an ordinary QR code —
-or, with `--format datamatrix`, a Data Matrix (ECC 200) symbol. By default it
-picks the best rendering your terminal offers — a crisp bitmap over the Kitty or
-Sixel graphics protocol where supported, otherwise Unicode block characters, so
-a plain UTF-8 terminal always works.
+`qrtxt` reads a string, a file, or piped input and prints an ordinary QR code.
+The `datamatrix` subcommand prints a Data Matrix (ECC 200) symbol instead. By
+default it picks the best rendering your terminal offers — a crisp bitmap over
+the Kitty or Sixel graphics protocol where supported, otherwise Unicode block
+characters, so a plain UTF-8 terminal always works.
 
 ```console
 $ qrtxt "hi"
@@ -36,10 +36,11 @@ quiet zone shows as blank space in this color-free transcript.)
 ## Features
 
 - **Three input modes** — a literal argument, a file (`--file`), or standard input.
-- **Two barcode formats** — QR codes (the default) and Data Matrix (ECC 200)
-  symbols, selected with `--format`.
+- **Two barcode formats** — one subcommand each: `qr` (an ordinary QR code) and
+  `datamatrix` (a Data Matrix (ECC 200) symbol).
 - **Exact error correction** — `L`, `M`, `Q`, or `H`, never silently boosted
-  (QR only; a Data Matrix's correction is fixed by its symbol size).
+  (the `qr` subcommand only; a Data Matrix's correction is fixed by its symbol
+  size, so `datamatrix` has no such option).
 - **Five render modes** — `--mode auto` (default) picks the best rendering the
   terminal offers: a crisp bitmap over the Kitty or Sixel graphics protocol where
   supported, otherwise Unicode block glyphs. Force a specific one with `text`,
@@ -86,11 +87,18 @@ Requires Rust 1.85 or newer.
 ## Usage
 
 ```text
-qrtxt [OPTIONS] [DATA]
+qrtxt <COMMAND> [OPTIONS] [DATA]
+
+Commands:
+  qr          Encode a QR code
+  datamatrix  Encode a Data Matrix (ECC 200) symbol [alias: dm]
+  help        Print this message or the help of the given subcommand(s)
 
 Options:
-  -h, --help     Print help (see more with '--help')
+  -h, --help     Print help (see a summary with '-h')
   -V, --version  Print version
+
+The options below are shared by every subcommand; `qr` adds -e/--error-correction.
 
 Payload:
   -f, --file <PATH>       Read the payload from a file
@@ -98,8 +106,7 @@ Payload:
   [DATA]                  Literal payload to encode
 
 Encoding:
-  -e, --error-correction <LEVEL>  Error-correction level: L (about 7% recoverable), M (15%), Q (25%), or H (30%) [default: L]
-  -F, --format <FORMAT>           Barcode format: qr code (qr) or datamatrix (dm) [default: "qr code"]
+  -e, --error-correction <LEVEL>  (qr only) Error-correction level: L (about 7% recoverable), M (15%), Q (25%), or H (30%) [default: L]
   -m, --max-bytes <BYTES>         Cap the payload of each symbol at BYTES bytes; implies splitting (default: the symbol's own limit)
   -c, --chunk <COUNT>             Split the payload across at least COUNT symbols; advisory (default: no minimum)
 
@@ -114,71 +121,79 @@ Text rendering:
 Source: https://github.com/can2049/qrtxt
 ```
 
-Run `qrtxt --help` for a full description of every option and the effect of its
-arguments (`-h` prints the short summary).
+A bare invocation with no subcommand is treated as `qr`, so `qrtxt "hi"` and
+`cat token.txt | qrtxt` keep working. Run `qrtxt --help` for the command list,
+`qrtxt qr --help` or `qrtxt datamatrix --help` for the per-format options, and
+`qrtxt qr -h` for the short summary.
 
 ## Examples
 
 ```console
-# literal string
+# literal string (a bare invocation defaults to qr)
 qrtxt "https://example.com"
+
+# the same, spelled explicitly
+qrtxt qr "https://example.com"
 
 # pipe a secret to the screen without touching disk
 cat token.txt | qrtxt
 
 # read from a file
-qrtxt --file payload.txt
-
-# a crisp black-and-white bitmap (needs a Kitty-protocol terminal)
-qrtxt --mode kitty "https://example.com"
-
-# a crisp black-and-white bitmap (needs a Sixel-protocol terminal)
-qrtxt --mode sixel "https://example.com"
+qrtxt qr --file payload.txt
 
 # a Data Matrix (ECC 200) symbol instead of a QR code
-qrtxt --format datamatrix "https://example.com"
+qrtxt datamatrix "https://example.com"
+
+# a crisp black-and-white bitmap (needs a Kitty-protocol terminal)
+qrtxt qr --mode kitty "https://example.com"
+
+# a crisp black-and-white bitmap (needs a Sixel-protocol terminal)
+qrtxt qr --mode sixel "https://example.com"
 
 # force Unicode block glyphs (for a pipe, or to compare against a bitmap)
-qrtxt --mode text "hello"
+qrtxt qr --mode text "hello"
 
 # ANSI escape codes for terminals without block glyphs
-qrtxt --mode ansi "hello"
+qrtxt qr --mode ansi "hello"
 
-# higher error correction
-qrtxt --error-correction H "important payload"
+# higher error correction (qr only)
+qrtxt qr --error-correction H "important payload"
 
 # a tighter quiet zone
-qrtxt --border 1 "hello"
+qrtxt qr --border 1 "hello"
 
 # denser packing for narrow terminals
-qrtxt --mode text --glyphs braille "hello"
+qrtxt qr --mode text --glyphs braille "hello"
 
 # light-on-dark instead of the default dark-on-light
-qrtxt --invert "hello"
+qrtxt qr --invert "hello"
 
 # split automatically, capping each code at 500 bytes
-qrtxt --max-bytes 500 --file big.txt
+qrtxt qr --max-bytes 500 --file big.txt
 
 # split into at least 4 balanced codes
-qrtxt --chunk 4 "a-short-but-verifiable-payload"
+qrtxt qr --chunk 4 "a-short-but-verifiable-payload"
 ```
 
 ## Barcode formats
 
-`--format` chooses which symbol is produced; `--mode` (below) chooses how it is
-drawn. Both formats render through every mode.
+The subcommand chooses which symbol is produced; `--mode` (below) chooses how it
+is drawn. Every format renders through every mode.
 
-| `--format` | Symbol |
+| Subcommand | Symbol |
 |---|---|
-| `qr code` (`qr`, default) | An ordinary QR code. `--error-correction` applies. |
+| `qr` (default) | An ordinary QR code. `--error-correction` applies. |
 | `datamatrix` (`dm`) | A Data Matrix (ECC 200) symbol, always square. |
+
+A bare invocation with no subcommand is treated as `qr`, so `qrtxt "hi"` and
+`cat token.txt | qrtxt` keep working. A Data Matrix's error correction is fixed
+by the symbol size, so `datamatrix` exposes no options and rejects
+`--error-correction`.
 
 A Data Matrix holds far less data per symbol than a QR code (about 1555 bytes
 versus 2953 at the lowest error level), so the same payload splits into more
-symbols. Its error correction is fixed by the symbol size, so
-`--error-correction` does not apply to it and is ignored. Non-ASCII text is
-declared with a UTF-8 ECI, exactly as for QR; many scanners handle that
-inconsistently, so prefer printable ASCII where you can.
+symbols. Non-ASCII text is declared with a UTF-8 ECI, exactly as for QR; many
+scanners handle that inconsistently, so prefer printable ASCII where you can.
 
 ## Rendering modes
 
