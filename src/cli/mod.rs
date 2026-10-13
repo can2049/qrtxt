@@ -9,7 +9,7 @@ use std::io::{IsTerminal, Write};
 use clap::Parser;
 
 use crate::error::AppError;
-use crate::types::{Config, Ec, Format, GlyphSet, InputSpec, Mode, RenderMode, Symbol};
+use crate::types::{Config, Ec, Format, GlyphSet, InputSpec, Mode, RenderMode};
 
 mod help;
 mod probe;
@@ -261,69 +261,25 @@ pub fn run(
     stdout: &mut dyn std::io::Write,
     stdin_is_tty: bool,
 ) -> Result<(), AppError> {
-    let payload = crate::input::resolve(cfg, stdin, stdin_is_tty)?;
+    let payload = crate::input::resolve(&cfg.input, cfg.preserve_newline, stdin, stdin_is_tty)?;
     let codes =
         crate::encode::encode_multi(&payload, cfg.format, cfg.ec, cfg.max_bytes, cfg.min_chunks)?;
 
     let mut writer = std::io::BufWriter::new(stdout);
-    if let Err(error) = render_all(cfg, &codes, &mut writer) {
+    let options = crate::render::RenderOptions {
+        border: cfg.border,
+        invert: cfg.invert,
+        glyphs: cfg.glyphs,
+    };
+    if let Err(error) =
+        crate::render::render_all(&codes, cfg.format, cfg.mode, options, &mut writer)
+    {
         return map_write_error(error);
     }
     match writer.flush() {
         Ok(()) => Ok(()),
         Err(error) => map_write_error(error),
     }
-}
-
-/// First image id handed to the transmitted bitmaps (FR-3.12).
-///
-/// Each code takes the next id. The Kitty protocol replaces an image stored under
-/// a repeated id, so sharing one id would leave only the last code visible.
-const KITTY_IMAGE_ID_BASE: u32 = 424_242;
-
-/// Caption prefix for a multi-symbol run: the symbology's full name, so the label
-/// reads unambiguously (`QR Code 1/3`, `Data Matrix 1/3`).
-fn format_label(format: Format) -> &'static str {
-    match format {
-        Format::Qr => "QR Code",
-        Format::DataMatrix => "Data Matrix",
-    }
-}
-
-/// Draw every code; when there is more than one, caption each and separate them.
-fn render_all(cfg: &Config, codes: &[Symbol], out: &mut dyn std::io::Write) -> std::io::Result<()> {
-    let total = codes.len();
-    let label = format_label(cfg.format);
-    for (index, symbol) in codes.iter().enumerate() {
-        if total > 1 {
-            writeln!(out, "{label} {}/{}", index + 1, total)?;
-        }
-        match cfg.mode {
-            RenderMode::Kitty => {
-                let id = KITTY_IMAGE_ID_BASE.wrapping_add(index as u32);
-                crate::render::render_kitty(symbol, cfg.border, cfg.invert, id, out)?;
-            }
-            RenderMode::Sixel => {
-                crate::render::render_sixel(symbol, cfg.border, cfg.invert, out)?;
-            }
-            RenderMode::Compact => {
-                let frame = crate::render::build_ink(symbol, cfg.border, cfg.invert, cfg.glyphs);
-                crate::render::render_on_field(&frame, cfg.glyphs, cfg.invert, out)?;
-            }
-            RenderMode::Ansi => {
-                // ANSI draws one module per two spaces and ignores the glyph set,
-                // so pin the frame's tile to the smallest one: the output is then
-                // independent of `--glyphs` instead of shifting with it.
-                let frame =
-                    crate::render::build_ink(symbol, cfg.border, cfg.invert, GlyphSet::Half);
-                crate::render::render_ansi(&frame, cfg.invert, out)?;
-            }
-        }
-        if total > 1 && index + 1 < total {
-            out.write_all(b"\n")?;
-        }
-    }
-    Ok(())
 }
 
 fn map_write_error(error: std::io::Error) -> Result<(), AppError> {
@@ -443,119 +399,6 @@ mod tests {
     }
 
     #[test]
-    fn render_all_captions_multiple_codes() {
-        let cfg = parse(&["-e", "L", "x"]).to_config();
-        let codes = crate::encode::encode_multi(
-            &vec![b'x'; 4000],
-            cfg.format,
-            cfg.ec,
-            cfg.max_bytes,
-            cfg.min_chunks,
-        )
-        .unwrap();
-        assert!(codes.len() > 1);
-        let mut out = Vec::new();
-        render_all(&cfg, &codes, &mut out).unwrap();
-        let text = String::from_utf8(out).unwrap();
-        assert!(text.contains("QR Code 1/"), "{text}");
-        assert!(
-            text.contains(&format!("QR Code {0}/{0}", codes.len())),
-            "{text}"
-        );
-    }
-
-    #[test]
-    fn render_all_leaves_a_single_code_uncaptioned() {
-        let cfg = parse(&["x"]).to_config();
-        let codes = crate::encode::encode_multi(
-            b"hello",
-            cfg.format,
-            cfg.ec,
-            cfg.max_bytes,
-            cfg.min_chunks,
-        )
-        .unwrap();
-        assert_eq!(codes.len(), 1);
-        let mut out = Vec::new();
-        render_all(&cfg, &codes, &mut out).unwrap();
-        let text = String::from_utf8(out).unwrap();
-        assert!(!text.contains("QR Code "), "{text}");
-    }
-
-    #[test]
-    fn ansi_output_is_independent_of_the_glyph_set() {
-        // Regression: ANSI ignores the glyph set, but the frame was still padded
-        // to the chosen glyph's tile, so `--mode ansi -g braille` gained blank
-        // rows over `--mode ansi`. The frame now uses the smallest tile in ANSI
-        // mode, so they match.
-        let ansi = parse(&["--mode", "ansi", "hi"]).to_config();
-        let braille = parse(&["--mode", "ansi", "-g", "braille", "hi"]).to_config();
-        assert_eq!(braille.mode, RenderMode::Ansi);
-        let codes = crate::encode::encode_multi(
-            b"hi",
-            ansi.format,
-            ansi.ec,
-            ansi.max_bytes,
-            ansi.min_chunks,
-        )
-        .unwrap();
-        let draw = |cfg: &Config| {
-            let mut out = Vec::new();
-            render_all(cfg, &codes, &mut out).unwrap();
-            out
-        };
-        assert_eq!(draw(&ansi), draw(&braille));
-    }
-
-    #[test]
-    fn render_all_kitty_renders_every_code_with_its_own_image_id() {
-        // Regression: every code once shared one image id, so the terminal
-        // replaced every bitmap but the last and the earlier codes looked
-        // unrendered. Each code must now be transmitted as its own image with a
-        // distinct id, in order.
-        let cfg = parse(&["--mode", "kitty", "-e", "L", "x"]).to_config();
-        let codes = crate::encode::encode_multi(
-            &vec![b'x'; 6000],
-            cfg.format,
-            cfg.ec,
-            cfg.max_bytes,
-            cfg.min_chunks,
-        )
-        .unwrap();
-        assert!(codes.len() >= 3, "payload should split into several codes");
-
-        let mut out = Vec::new();
-        render_all(&cfg, &codes, &mut out).unwrap();
-        let text = String::from_utf8(out).unwrap();
-
-        // Exactly one "transmit and display" control block per code: nothing is
-        // skipped, and no image is emitted more than once.
-        assert_eq!(
-            text.matches("a=T,f=24,").count(),
-            codes.len(),
-            "each code must be transmitted exactly once"
-        );
-
-        // Ids are assigned in order, one per code, so an earlier image is never
-        // overwritten by a later one.
-        let ids: Vec<u32> = text
-            .match_indices(",i=")
-            .map(|(start, _)| {
-                let rest = &text[start + 3..];
-                rest[..rest
-                    .find(',')
-                    .expect("id is followed by another control key")]
-                    .parse()
-                    .expect("numeric image id")
-            })
-            .collect();
-        let expected: Vec<u32> = (0..codes.len() as u32)
-            .map(|index| KITTY_IMAGE_ID_BASE + index)
-            .collect();
-        assert_eq!(ids, expected, "image ids must be distinct and in order");
-    }
-
-    #[test]
     fn long_flags_resolve() {
         let cfg = parse(&[
             "--preserve-newline",
@@ -665,44 +508,5 @@ mod tests {
     #[test]
     fn format_rejects_unknown_value() {
         assert!(Cli::try_parse_from(["qrtxt", "--format", "pdf417", "x"]).is_err());
-    }
-
-    #[test]
-    fn render_all_labels_datamatrix_captions() {
-        let cfg = parse(&["--format", "datamatrix", "-e", "L", "x"]).to_config();
-        let codes = crate::encode::encode_multi(
-            &vec![b'x'; 4000],
-            cfg.format,
-            cfg.ec,
-            cfg.max_bytes,
-            cfg.min_chunks,
-        )
-        .unwrap();
-        assert!(codes.len() > 1, "expected a split");
-        let mut out = Vec::new();
-        render_all(&cfg, &codes, &mut out).unwrap();
-        let text = String::from_utf8(out).unwrap();
-        assert!(text.contains("Data Matrix 1/"), "{text}");
-        assert!(!text.contains("QR Code "), "{text}");
-    }
-
-    #[test]
-    fn render_all_sixel_renders_one_sequence_per_code() {
-        let cfg = parse(&["--mode", "sixel", "-e", "L", "x"]).to_config();
-        let codes = crate::encode::encode_multi(
-            &vec![b'x'; 6000],
-            cfg.format,
-            cfg.ec,
-            cfg.max_bytes,
-            cfg.min_chunks,
-        )
-        .unwrap();
-        assert!(codes.len() >= 3, "payload should split into several codes");
-
-        let mut out = Vec::new();
-        render_all(&cfg, &codes, &mut out).unwrap();
-        let text = String::from_utf8(out).unwrap();
-        // One Sixel sequence (DCS introducer) per code; nothing skipped or doubled.
-        assert_eq!(text.matches("\x1bPq").count(), codes.len());
     }
 }
