@@ -270,7 +270,7 @@ argv / stdin -> input::resolve -> encode::encode_multi -> render::build_ink -> r
 
 代码分层,依赖单向:
 
-- `cli` 负责参数解析与流程编排(`run` / `run_with`)。
+- `cli` 负责参数解析(`parse`)与流程编排(`run` / `run_with`)。
 - `input`、`encode`、`render` 是纯逻辑,不依赖 `clap`。
 - `encode` 按符号类型包装对应的条码库(QR 用 `qrcode`,Data Matrix 用 `datamatrix`),
   并产出与符号类型无关的 `Symbol`(明暗模块网格),因此只有 `encode` 依赖条码库。
@@ -280,7 +280,8 @@ argv / stdin -> input::resolve -> encode::encode_multi -> render::build_ink -> r
 渲染分两步:`build_ink` 把 `Symbol` 转成布尔“墨色”网格(施加静默区、反相),
 `render` 再按字形集把网格打包成字符;`render_on_field` 给这些字符套上显式颜色,使深色
 模块打印成白底黑字,`render_ansi` 用转义序列绘制同一网格。`render_kitty` 与
-`render_sixel` 跳过该网格,直接通过 Kitty 或 Sixel 协议输出黑白位图。round-trip 测试会
+`render_sixel` 跳过该网格,直接通过 Kitty 或 Sixel 协议输出黑白位图。`render` 自身按策略
+拆成 `frame`/`text`/`ansi`/`bitmap` 子模块,由 `render_all` 统一分发。round-trip 测试会
 先剥掉颜色转义、把输出还原成模块网格、再解码——QR 用 `rqrr`,Data Matrix 用
 `datamatrix` crate——以证明打印出来的东西仍然可扫。
 

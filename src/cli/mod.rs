@@ -1,8 +1,9 @@
-//! Command-line interface: argument parsing (`Cli`) and orchestration (`run`).
+//! Command-line interface: the `Cli` schema (`Cli`) and orchestration (`run`).
 //!
-//! All argument parsing lives here; the graphics capability probes live in
-//! [`probe`] and the `--help` hint plumbing in [`help`]. Their public items are
-//! re-exported below so callers keep using the `cli::` path.
+//! All argument parsing lives here; the argv entry point is [`parse`], the
+//! graphics capability probes live in [`probe`] and the `--help` hint plumbing in
+//! [`help`]. Their public items are re-exported below so callers keep using the
+//! `cli::` path.
 
 use std::io::{IsTerminal, Write};
 
@@ -12,9 +13,11 @@ use crate::error::AppError;
 use crate::types::{Config, Ec, Format, GlyphSet, InputSpec, Mode, RenderMode};
 
 mod help;
+mod parse;
 mod probe;
 
 pub use help::{add_mode_hint, mode_support_hint};
+pub use parse::parse;
 
 /// Turn text into a terminal QR code.
 #[derive(Debug, Parser)]
@@ -181,9 +184,14 @@ pub struct Cli {
 }
 
 impl Cli {
-    /// Convert parsed arguments into a neutral configuration.
+    /// Convert parsed arguments into a neutral configuration for `mode`.
+    ///
+    /// The render mode is supplied by the caller rather than derived here: the
+    /// `auto` policy needs the terminal's capabilities, so [`run_with`] resolves
+    /// it via [`resolve_mode`] first. Taking it as a parameter keeps this mapping
+    /// pure and leaves a single source of truth for `Mode` -> [`RenderMode`].
     #[must_use]
-    pub fn to_config(&self) -> Config {
+    pub fn to_config(&self, mode: RenderMode) -> Config {
         let input = match (&self.data, &self.file) {
             (Some(text), _) => InputSpec::Literal(text.clone()),
             (None, Some(path)) => InputSpec::File(path.clone()),
@@ -196,7 +204,7 @@ impl Cli {
             border: self.border,
             invert: self.invert,
             glyphs: self.glyphs,
-            mode: base_render_mode(self.mode),
+            mode,
             preserve_newline: self.preserve_newline,
             max_bytes: self.max_bytes.map(|bytes| bytes as usize),
             min_chunks: self.chunk.map(|count| count as usize),
@@ -204,24 +212,9 @@ impl Cli {
     }
 }
 
-/// The render mode a [`Mode`] maps to without a terminal to probe.
-///
-/// `auto` becomes text here: this is the interpretation [`Cli::to_config`] hands
-/// to the pure [`run`] path. [`run_with`] refines `auto` against the terminal's
-/// capabilities before running.
-fn base_render_mode(mode: Mode) -> RenderMode {
-    match mode {
-        Mode::Auto | Mode::Text => RenderMode::Compact,
-        Mode::Ansi => RenderMode::Ansi,
-        Mode::Kitty => RenderMode::Kitty,
-        Mode::Sixel => RenderMode::Sixel,
-    }
-}
-
 /// Default entry point: reads global stdin/stdout and TTY state.
 pub fn run_with(cli: &Cli) -> Result<(), AppError> {
-    let mut cfg = cli.to_config();
-    cfg.mode = resolve_mode(cli.mode)?;
+    let cfg = cli.to_config(resolve_mode(cli.mode)?);
     let mut stdin = std::io::stdin().lock();
     let mut stdout = std::io::stdout().lock();
     let stdin_is_tty = std::io::stdin().is_terminal();
@@ -305,22 +298,27 @@ mod tests {
         Cli::try_parse_from(argv).expect("arguments should parse")
     }
 
+    /// A config with the default (text) render mode, for the tests that do not
+    /// exercise mode resolution.
+    fn config(args: &[&str]) -> Config {
+        parse(args).to_config(RenderMode::Compact)
+    }
+
     #[test]
     fn literal_takes_precedence_over_stdin() {
-        let cfg = parse(&["hello"]).to_config();
+        let cfg = config(&["hello"]);
         assert_eq!(cfg.input, InputSpec::Literal("hello".to_string()));
     }
 
     #[test]
     fn file_input() {
-        let cfg = parse(&["--file", "payload.txt"]).to_config();
+        let cfg = config(&["--file", "payload.txt"]);
         assert_eq!(cfg.input, InputSpec::File("payload.txt".into()));
     }
 
     #[test]
     fn no_source_means_stdin() {
-        let cfg = parse(&[]).to_config();
-        assert_eq!(cfg.input, InputSpec::Stdin);
+        assert_eq!(config(&[]).input, InputSpec::Stdin);
     }
 
     #[test]
@@ -336,8 +334,9 @@ mod tests {
 
     #[test]
     fn defaults_and_flags() {
-        let cfg = parse(&["x", "--mode", "ansi", "--invert", "--glyphs", "braille"]).to_config();
-        assert_eq!(cfg.mode, RenderMode::Ansi);
+        let cli = parse(&["x", "--mode", "ansi", "--invert", "--glyphs", "braille"]);
+        assert_eq!(cli.mode, Mode::Ansi);
+        let cfg = cli.to_config(RenderMode::Ansi);
         assert!(cfg.invert);
         assert_eq!(cfg.glyphs, GlyphSet::Braille);
         assert_eq!(cfg.border, 4);
@@ -347,13 +346,13 @@ mod tests {
 
     #[test]
     fn short_flags_resolve() {
-        let cfg = parse(&[
+        let cli = parse(&[
             "-p", "-i", "-M", "ansi", "-g", "half", "-e", "H", "-b", "2", "-m", "9", "x",
-        ])
-        .to_config();
+        ]);
+        assert_eq!(cli.mode, Mode::Ansi);
+        let cfg = cli.to_config(RenderMode::Ansi);
         assert!(cfg.preserve_newline);
         assert!(cfg.invert);
-        assert_eq!(cfg.mode, RenderMode::Ansi);
         assert_eq!(cfg.glyphs, GlyphSet::Half);
         assert_eq!(cfg.ec, Ec::H);
         assert_eq!(cfg.border, 2);
@@ -362,16 +361,13 @@ mod tests {
 
     #[test]
     fn max_bytes_defaults_to_none() {
-        assert_eq!(parse(&["x"]).to_config().max_bytes, None);
+        assert_eq!(config(&["x"]).max_bytes, None);
     }
 
     #[test]
     fn max_bytes_parses_long_and_short() {
-        assert_eq!(
-            parse(&["--max-bytes", "100", "x"]).to_config().max_bytes,
-            Some(100)
-        );
-        assert_eq!(parse(&["-m", "100", "x"]).to_config().max_bytes, Some(100));
+        assert_eq!(config(&["--max-bytes", "100", "x"]).max_bytes, Some(100));
+        assert_eq!(config(&["-m", "100", "x"]).max_bytes, Some(100));
     }
 
     #[test]
@@ -381,16 +377,13 @@ mod tests {
 
     #[test]
     fn chunk_defaults_to_none() {
-        assert_eq!(parse(&["x"]).to_config().min_chunks, None);
+        assert_eq!(config(&["x"]).min_chunks, None);
     }
 
     #[test]
     fn chunk_parses_long_and_short() {
-        assert_eq!(
-            parse(&["--chunk", "3", "x"]).to_config().min_chunks,
-            Some(3)
-        );
-        assert_eq!(parse(&["-c", "3", "x"]).to_config().min_chunks, Some(3));
+        assert_eq!(config(&["--chunk", "3", "x"]).min_chunks, Some(3));
+        assert_eq!(config(&["-c", "3", "x"]).min_chunks, Some(3));
     }
 
     #[test]
@@ -400,7 +393,7 @@ mod tests {
 
     #[test]
     fn long_flags_resolve() {
-        let cfg = parse(&[
+        let cli = parse(&[
             "--preserve-newline",
             "--invert",
             "--mode",
@@ -416,11 +409,11 @@ mod tests {
             "--chunk",
             "4",
             "x",
-        ])
-        .to_config();
+        ]);
+        assert_eq!(cli.mode, Mode::Ansi);
+        let cfg = cli.to_config(RenderMode::Ansi);
         assert!(cfg.preserve_newline);
         assert!(cfg.invert);
-        assert_eq!(cfg.mode, RenderMode::Ansi);
         assert_eq!(cfg.glyphs, GlyphSet::Quadrant);
         assert_eq!(cfg.ec, Ec::Q);
         assert_eq!(cfg.border, 1);
@@ -451,39 +444,36 @@ mod tests {
 
     #[test]
     fn mode_flag_selects_kitty() {
-        assert_eq!(
-            parse(&["--mode", "kitty", "x"]).to_config().mode,
-            RenderMode::Kitty
-        );
-        assert_eq!(
-            parse(&["-M", "kitty", "x"]).to_config().mode,
-            RenderMode::Kitty
-        );
-        assert_ne!(parse(&["x"]).to_config().mode, RenderMode::Kitty);
+        assert_eq!(parse(&["--mode", "kitty", "x"]).mode, Mode::Kitty);
+        assert_eq!(parse(&["-M", "kitty", "x"]).mode, Mode::Kitty);
+        assert_ne!(parse(&["x"]).mode, Mode::Kitty);
     }
 
     #[test]
     fn mode_flag_selects_sixel() {
-        assert_eq!(
-            parse(&["--mode", "sixel", "x"]).to_config().mode,
-            RenderMode::Sixel
-        );
-        assert_eq!(
-            parse(&["-M", "sixel", "x"]).to_config().mode,
-            RenderMode::Sixel
-        );
-        assert_ne!(parse(&["x"]).to_config().mode, RenderMode::Sixel);
+        assert_eq!(parse(&["--mode", "sixel", "x"]).mode, Mode::Sixel);
+        assert_eq!(parse(&["-M", "sixel", "x"]).mode, Mode::Sixel);
+        assert_ne!(parse(&["x"]).mode, Mode::Sixel);
     }
 
     #[test]
-    fn mode_defaults_to_auto_then_text_without_a_terminal() {
-        // `auto` is the parsed default; without a terminal to probe it lands on
-        // text, which is what the pure `run` path and these tests observe.
+    fn mode_defaults_to_auto() {
         assert_eq!(parse(&["x"]).mode, Mode::Auto);
-        assert_eq!(parse(&["x"]).to_config().mode, RenderMode::Compact);
+    }
+
+    #[test]
+    fn resolve_mode_maps_the_explicit_text_modes_without_probing() {
+        // Text and ANSI need no terminal probe, so their mapping is a pure call;
+        // `auto` (which does probe) is covered end to end by tests/cli.rs.
+        assert_eq!(resolve_mode(Mode::Text).unwrap(), RenderMode::Compact);
+        assert_eq!(resolve_mode(Mode::Ansi).unwrap(), RenderMode::Ansi);
+    }
+
+    #[test]
+    fn to_config_uses_the_resolved_mode() {
         assert_eq!(
-            parse(&["--mode", "text", "x"]).to_config().mode,
-            RenderMode::Compact
+            parse(&["x"]).to_config(RenderMode::Sixel).mode,
+            RenderMode::Sixel
         );
     }
 
@@ -495,14 +485,11 @@ mod tests {
     #[test]
     fn format_flag_selects_datamatrix() {
         assert_eq!(
-            parse(&["--format", "datamatrix", "x"]).to_config().format,
+            config(&["--format", "datamatrix", "x"]).format,
             Format::DataMatrix
         );
-        assert_eq!(
-            parse(&["-F", "dm", "x"]).to_config().format,
-            Format::DataMatrix
-        );
-        assert_eq!(parse(&["x"]).to_config().format, Format::Qr);
+        assert_eq!(config(&["-F", "dm", "x"]).format, Format::DataMatrix);
+        assert_eq!(config(&["x"]).format, Format::Qr);
     }
 
     #[test]

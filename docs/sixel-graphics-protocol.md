@@ -1,7 +1,7 @@
 # Sixel 图形协议渲染 · 实现说明
 
 > `qrtxt --mode sixel` 用 Sixel 图形协议把二维码画成**像素级黑白位图**，而非 Unicode 字形。
-> 状态：已实现（分支 `docs/sixel-support`），测试全绿（139 项）。
+> 状态：已实现（分支 `docs/sixel-support`），测试全绿（180 项）。
 
 **动机**：`--mode kitty`（Kitty 图形协议）覆盖 kitty / Ghostty / WezTerm 一小批终端；而 xterm、
 Konsole、foot、mlterm、iTerm2、Windows Terminal 等大量终端**不支持 Kitty、但支持 Sixel**。
@@ -42,12 +42,13 @@ input -> encode -> render::render_sixel -> sixel::encode -> stdout
 - **`src/sixel.rs`（纯逻辑）**：协议封帧本身。
   - `encode`：写调色板 + 光栅属性 + 逐带（黑白各一遍）RLE 数据 + 终止。
   - `write_rle`：游程压缩；`da1_query` / `response_has_sixel`：探测序列与判定。
-- **`src/render.rs`**：`module_bitmap(qr, border)` 把二维码矩阵放大成方形像素位图
+- **`src/render/bitmap.rs`**：`module_bitmap(qr, border)` 把二维码矩阵放大成方形像素位图
   （`module_px = (300 / side).clamp(3, 8)`，静默区为亮色），`render_kitty` 与
   `render_sixel` 共用；`render_sixel` 再把位图交给 `sixel::encode`。
 - **`src/types.rs`**：`RenderMode::Sixel`。
-- **`src/cli/`**：`mod.rs` 放 `-M/--mode` 开关（值 `auto`/`text`/`ansi`/`kitty`/`sixel`）与渲染
-  分支；`probe.rs` 放 Kitty/Sixel 合并探测；`help.rs` 放帮助提示。
+- **`src/cli/`**：`mod.rs` 放 `-M/--mode` 开关（值 `auto`/`text`/`ansi`/`kitty`/`sixel`）与
+  `Cli -> Config` 映射；`parse.rs` 把 argv 解析成 `Cli`、在帮助时注入提示；`probe.rs` 放
+  Kitty/Sixel 合并探测；`help.rs` 放帮助提示文案。
 
 ### 编码流程（`sixel::encode`）
 
@@ -80,7 +81,7 @@ Sixel 没有 Kitty 那样的握手，改用**主设备属性（DA1）**，并与
 ## 三、验证
 
 - `cargo fmt --all -- --check`、`cargo clippy --all-targets -- -D warnings` 通过。
-- `cargo test`：**142 项通过**（lib 96 + cli 26 + roundtrip 20）。
+- `cargo test`：**180 项通过**（lib 119 + cli 34 + roundtrip 27）。
 - 可扫性：`sixel_bitmap_round_trips` / `sixel_multi_code_round_trips` 用测试内置的极简
   Sixel 解码器把输出还原成位图、抽样回模块网格，再交 `rqrr` 解码，覆盖普通 / URL /
   中文 / 反相及多码顺序重组。

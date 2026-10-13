@@ -14,10 +14,16 @@ terminal text. It is a library (`src/lib.rs`) plus a thin binary (`src/main.rs`)
   pure (they do no IO); `input` only reads the payload source (a file, or the injected
   stdin reader). All argument parsing and all process-level side effects (locking
   stdin/stdout, probing the TTY, writing output) live in `src/cli/`: `mod.rs` holds the
-  `Cli` schema and orchestration, `probe.rs` the fused Kitty+Sixel capability probe,
-  `help.rs` the `--help` hint. Put new pure logic in a domain module, not in `cli`.
+  `Cli` schema, the `Cli -> Config` mapping and orchestration, `parse.rs` the argv entry
+  point, `probe.rs` the fused Kitty+Sixel capability probe, `help.rs` the `--help` hint.
+  Put new pure logic in a domain module, not in `cli`. `render` is a directory of
+  single-responsibility modules (`frame` builds the ink grid, `text`/`ansi` draw it,
+  `bitmap` scales it for the graphics protocols, `style` holds the SGR colours) unified
+  by the `render::render_all` dispatch; add a module plus a `RenderMode` arm for a new
+  renderer instead of growing one function.
 - Rendering is chosen by a single `--mode` selector (`auto`/`text`/`ansi`/`kitty`/`sixel`).
-  `auto`, the default, is resolved in `cli::run_with` against the terminal's capabilities:
+  `auto`, the default, is resolved by `cli::resolve_mode` (called from `cli::run_with`)
+  against the terminal's capabilities:
   it picks a bitmap only when `stdout` is a terminal and a protocol is supported (Kitty
   before Sixel), so a piped or redirected run always yields text. Both protocols are asked
   in ONE round trip (`probe.rs`) — they share one `/dev/tty` stream, so never probe them

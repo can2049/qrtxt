@@ -50,7 +50,7 @@ input -> encode::{Codec} -> render -> stdout
 ### 解耦:中立的 `Symbol`
 
 先做一步纯重构(不改变行为):**`src/types.rs` 新增 `Symbol`**——`width`/`height` 与
-`is_dark(x, y)` 组成的明暗网格。`encode` 产出它,`render`/`cli` 消费它,于是 `render.rs`
+`is_dark(x, y)` 组成的明暗网格。`encode` 产出它,`render`/`cli` 消费它,于是 `render/`
 与 `cli/mod.rs` **不再依赖 `qrcode`**(仅 `encode.rs` 依赖条码库)。位图路径同时从「方形」
 推广到任意 W×H,为将来的矩形符号留门。
 
@@ -79,7 +79,7 @@ trait Codec {
 - 新开关 `-F/--format qr|datamatrix`(`dm` 简写),新增 `types::Format`。
 - `--mode` 仍是**渲染**选择器;`--format` 是**符号**选择器,二者互不影响,五种渲染模式都对
   DM 生效。
-- 多符号标题按格式取 `QR Code i/N` / `Data Matrix i/N`(`cli::format_label`)。
+- 多符号标题按格式取 `QR Code i/N` / `Data Matrix i/N`(`render` 的 `format_label`)。
 
 ---
 
