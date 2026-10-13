@@ -1,7 +1,7 @@
 # Kitty 图形协议渲染 · 实现说明
 
 > `qrtxt --mode kitty` 用 Kitty 图形协议把二维码画成**像素级黑白位图**，而非 Unicode 字形。
-> 状态：已实现并合并（PR #1），测试全绿（117 项）。
+> 状态：已实现并合并（PR #1），测试全绿（180 项）。
 
 **背景**：braille 下暗模块只是一个凸点，三个定位框（finder pattern）被渲染成细点线、
 不够醒目。改用位图即可不受字体渲染质量的限制。
@@ -46,12 +46,14 @@ input -> encode -> render::render_kitty -> kitty::transmit_rgb -> stdout
   - `encode_base64`：手写 base64（不引额外依赖）。
   - `transmit_rgb`：按 3072 字节分块，首块带全部控制键，末块 `m=0`。
   - `query`：探测序列；`response_ok`：判定响应是否含 `;OK`。
-- **`src/render.rs`**：`render_kitty(qr, border, invert, id, out)` 把 QR 矩阵转 RGB 位图：
+- **`src/render/bitmap.rs`**：`render_kitty(qr, border, invert, id, out)` 把 QR 矩阵转 RGB 位图：
   `side = qr.width() + 2*border`，`module_px = (300/side).clamp(3,8)`；
   暗模块→黑、亮模块→白（`--invert` 交换），静默区为亮色。
 - **`src/types.rs`**：新增 `RenderMode::Kitty`。
-- **`src/cli/`**：`mod.rs` 放 `-M/--mode` 开关（值 `auto`/`text`/`ansi`/`kitty`/`sixel`）与逐码 id 分配；
-  `probe.rs` 放 Kitty/Sixel 合并探测；`help.rs` 放帮助提示。
+- **`src/render/mod.rs`**：`render_all` 分发渲染，并按 `424242 + index` 逐码分配 image id。
+- **`src/cli/`**：`mod.rs` 放 `-M/--mode` 开关（值 `auto`/`text`/`ansi`/`kitty`/`sixel`）与
+  `Cli -> Config` 映射；`parse.rs` 把 argv 解析成 `Cli`、在帮助时注入提示；`probe.rs` 放
+  Kitty/Sixel 合并探测；`help.rs` 放帮助提示文案。
 
 ### 支持探测（`a=q` 握手，与 DA1 合并为一次往返）
 
@@ -85,7 +87,7 @@ input -> encode -> render::render_kitty -> kitty::transmit_rgb -> stdout
 
 ## 三、验证
 
-- `cargo test`：**142 项通过**（lib 96 + cli 26 + roundtrip 20），无警告。
+- `cargo test`：**180 项通过**（lib 119 + cli 34 + roundtrip 27），无警告。
 - 可扫性：`kitty_bitmap_round_trips` / `kitty_multi_code_round_trips` 把 APC 解析回模块网格
   再交 `rqrr` 解码，覆盖普通 / URL / 中文 / 反相及多码顺序重组。
 - id 唯一：`render_all_kitty_renders_every_code_with_its_own_image_id`（改回共用 id 立刻失败）。

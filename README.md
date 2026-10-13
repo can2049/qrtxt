@@ -303,7 +303,7 @@ argv / stdin -> input::resolve -> encode::encode_multi -> render::build_ink -> r
 
 The crate is layered so that dependencies point in one direction only:
 
-- `cli` parses arguments and orchestrates the run (`run` / `run_with`).
+- `cli` parses arguments (`parse`) and orchestrates the run (`run` / `run_with`).
 - `input`, `encode`, and `render` are pure and do not depend on `clap`.
 - `encode` wraps one barcode crate per symbology (`qrcode` for QR, `datamatrix`
   for Data Matrix) and emits a symbology-agnostic `Symbol` — a dark/light module
@@ -318,7 +318,9 @@ grid (applying the quiet zone and inversion), and `render` packs that grid into
 character cells per glyph set. `render_on_field` wraps those glyphs in explicit
 colors so dark modules print black on a white field, and `render_ansi` paints the
 same grid with escape codes. `render_kitty` and `render_sixel` bypass the grid and
-emit a black-and-white bitmap over the Kitty or Sixel protocol. The round-trip test
+emit a black-and-white bitmap over the Kitty or Sixel protocol. Each strategy lives in
+its own `render` submodule (`frame`, `text`, `ansi`, `bitmap`) behind the `render_all`
+dispatch. The round-trip test
 suite renders the output, strips the colour codes, reconstructs the module grid, and
 decodes it again — with `rqrr` for QR and the `datamatrix` crate for Data Matrix — to
 prove the printed code is still scannable.
