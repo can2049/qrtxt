@@ -215,7 +215,7 @@ pub struct Config {
     pub format: Format,
     /// Quiet-zone width, in modules.
     pub border: u32,
-    /// Invert the ink mapping, for light-background terminals.
+    /// Swap the colors: draw light-on-dark instead of dark-on-light.
     pub invert: bool,
     /// Glyph set used to draw the symbol.
     pub glyphs: GlyphSet,

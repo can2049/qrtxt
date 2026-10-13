@@ -2,9 +2,11 @@
 //! parsed back into the module grid and decoded with `rqrr`; it must equal the
 //! original payload. This proves the printed code is still scannable.
 //!
-//! The parser recovers the raw *ink* grid (what the terminal draws in the
-//! foreground). Because the quiet zone is background in every mode, its ink is
-//! `false` and cannot be told apart from dark modules by ink alone; the decoder
+//! The character renderers wrap their glyphs in explicit SGR colour sequences
+//! (dark modules black on a white field), so the parser first strips them. It
+//! then recovers the raw *ink* grid (the cells the renderer draws as dark
+//! modules). Because the quiet zone is background in every mode, its ink is
+//! `false` and cannot be told apart from light modules by ink alone; the decoder
 //! therefore delimits the symbol using the known default border (4) and rebuilds
 //! a canonical image with a white quiet zone before decoding.
 
@@ -43,6 +45,26 @@ fn tile_width(glyph: &str) -> usize {
     }
 }
 
+/// Remove the SGR colour sequences the character renderers wrap their output in
+/// (for example `\x1b[30;107m` and `\x1b[0m`), so the parser sees only glyphs.
+fn strip_ansi(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(character) = chars.next() {
+        if character == '\x1b' && chars.peek() == Some(&'[') {
+            chars.next(); // consume '['
+            for parameter in chars.by_ref() {
+                if ('@'..='~').contains(&parameter) {
+                    break; // the final byte ends the CSI sequence
+                }
+            }
+        } else {
+            out.push(character);
+        }
+    }
+    out
+}
+
 fn render(args: &[&str]) -> String {
     let output = Command::cargo_bin("qrtxt")
         .expect("binary is built")
@@ -50,7 +72,7 @@ fn render(args: &[&str]) -> String {
         .output()
         .expect("runs");
     assert!(output.status.success(), "qrtxt failed: {output:?}");
-    String::from_utf8(output.stdout).expect("utf-8 output")
+    strip_ansi(&String::from_utf8(output.stdout).expect("utf-8 output"))
 }
 
 /// Parse the rendered text into a raw ink grid `(width, height, ink)`.
@@ -147,8 +169,8 @@ fn decode(
             let source = (y - CANONICAL_MARGIN + DEFAULT_BORDER) * parsed_width
                 + (x - CANONICAL_MARGIN + DEFAULT_BORDER);
             let cell_ink = ink[source];
-            // Default: light modules are ink; inverted: dark modules are ink.
-            if invert { cell_ink } else { !cell_ink }
+            // Default: dark modules are ink; inverted: light modules are ink.
+            if invert { !cell_ink } else { cell_ink }
         } else {
             false // canonical quiet zone is light
         }
@@ -349,7 +371,7 @@ fn rendered_grid_matches_the_matrix() {
         for y in 0..matrix {
             for x in 0..matrix {
                 let cell = ink[(y + DEFAULT_BORDER) * width + (x + DEFAULT_BORDER)];
-                let got_dark = if invert { cell } else { !cell };
+                let got_dark = if invert { !cell } else { cell };
                 assert_eq!(
                     got_dark,
                     expected[y * matrix + x],
@@ -520,8 +542,8 @@ fn kitty_bitmap_round_trips() {
 
         let side = qr.width() + 2 * DEFAULT_BORDER;
         let ink = parse_kitty(&buf, side, invert);
-        // `ink` marks dark modules, so decode as already-inverted.
-        let decoded = decode(side, side, &ink, qr.width(), true);
+        // `ink` marks dark modules, which is exactly what the decoder expects.
+        let decoded = decode(side, side, &ink, qr.width(), false);
         assert_eq!(decoded, payload, "invert={invert} payload={payload:?}");
     }
 }
@@ -548,7 +570,7 @@ fn kitty_multi_code_round_trips() {
 
         let side = qr.width() + 2 * DEFAULT_BORDER;
         let ink = parse_kitty(&buf, side, false);
-        let part = decode(side, side, &ink, qr.width(), true);
+        let part = decode(side, side, &ink, qr.width(), false);
         assert!(!part.is_empty(), "empty bitmap for code {}", index + 1);
         assembled.push_str(&part);
     }
@@ -720,8 +742,8 @@ fn sixel_bitmap_round_trips() {
 
         let side = qr.width() + 2 * DEFAULT_BORDER;
         let ink = parse_sixel(&buf, side, invert);
-        // `ink` marks dark modules, so decode as already-inverted.
-        let decoded = decode(side, side, &ink, qr.width(), true);
+        // `ink` marks dark modules, which is exactly what the decoder expects.
+        let decoded = decode(side, side, &ink, qr.width(), false);
         assert_eq!(decoded, payload, "invert={invert} payload={payload:?}");
     }
 }
@@ -744,7 +766,7 @@ fn sixel_multi_code_round_trips() {
 
         let side = qr.width() + 2 * DEFAULT_BORDER;
         let ink = parse_sixel(&buf, side, false);
-        let part = decode(side, side, &ink, qr.width(), true);
+        let part = decode(side, side, &ink, qr.width(), false);
         assert!(!part.is_empty(), "empty sequence for code {}", index + 1);
         assembled.push_str(&part);
     }
@@ -773,7 +795,7 @@ fn datamatrix_crop(ink: &[bool], width: usize, invert: bool) -> (usize, Vec<bool
     for y in 0..size {
         for x in 0..size {
             let cell = ink[(y + DEFAULT_BORDER) * width + (x + DEFAULT_BORDER)];
-            dark[y * size + x] = if invert { cell } else { !cell };
+            dark[y * size + x] = if invert { !cell } else { cell };
         }
     }
     (size, dark)

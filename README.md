@@ -16,20 +16,22 @@ a plain UTF-8 terminal always works.
 ```console
 $ qrtxt "hi"
 
-     ▄▄▄▄▄ █▀▄█▀▄█ ▄▄▄▄▄
-     █   █ █▀▄█▀██ █   █
-     █▄▄▄█ █▀▀ ▄ █ █▄▄▄█
-    ▄▄▄▄▄▄▄█▄█ ▀ █▄▄▄▄▄▄▄
-     ▄ ▄▄▀▄▄▄▄▀█ ▄█ █▄█▄▀
-    ▀ ▀▀█ ▄ ██▄▄█▄█▀ ▄ ▄█
-    ▄█▄█▄▄▄█▀▄▀ ▀ ▀█▄▀▄█
-     ▄▄▄▄▄ █▄▀▀▀ ▀ ▄█▀█▄▀
-     █   █ █ ▀▄█ ██ ██ ██
-     █▄▄▄█ █ ▀█▄█▄█▀ ▄ ██
-           ▀    ▀ ▀▀    ▀
+    █▀▀▀▀▀█ ▄▀ ▄▀ █▀▀▀▀▀█
+    █ ███ █ ▄▀ ▄  █ ███ █
+    █ ▀▀▀ █ ▄▄█▀█ █ ▀▀▀ █
+    ▀▀▀▀▀▀▀ ▀ █▄█ ▀▀▀▀▀▀▀
+    █▀█▀▀▄▀▀▀▀▄ █▀ █ ▀ ▀▄
+    ▄█▄▄ █▀█  ▀▀ ▀ ▄█▀█▀
+    ▀ ▀ ▀▀▀ ▄▀▄█▄█▄ ▀▄▀ █
+    █▀▀▀▀▀█ ▀▄▄▄█▄█▀ ▄ ▀▄
+    █ ███ █ █▄▀ █  █  █
+    █ ▀▀▀ █ █▄ ▀ ▀ ▄█▀█
+    ▀▀▀▀▀▀▀ ▀▀▀▀ ▀  ▀▀▀▀
 ```
 
-(The quiet zone is rendered as blank space, so the code appears to float.)
+(The character renderers set explicit colors, so dark modules print black on a
+white field with a white quiet zone, whatever the terminal's own background is. The
+quiet zone shows as blank space in this color-free transcript.)
 
 ## Features
 
@@ -46,7 +48,9 @@ $ qrtxt "hi"
   fast instead of printing garbage.
 - **Three glyph sets** — half blocks (default), quadrants, braille — trading
   robustness for screen density (used by `--mode text`).
-- **Dark and light terminals** — `--invert` handles light backgrounds.
+- **Readable on any terminal** — the character renderers set explicit colors and
+  print dark modules black on a white field (with a white quiet zone), so the code
+  scans on a dark- or light-background terminal; `--invert` swaps to light-on-dark.
 - **Long payloads** — input too long for one symbol is split automatically across
   balanced codes; `--max-bytes` caps the bytes per code, `--chunk` sets a floor on
   the number of codes.
@@ -102,7 +106,7 @@ Encoding:
 Rendering:
   -M, --mode <MODE>      How to draw the code: auto, text, ansi, kitty, or sixel [default: auto]
   -b, --border <BORDER>  Quiet-zone width in modules; 0 removes the margin [default: 4]
-  -i, --invert           Invert the ink, for light-background terminals
+  -i, --invert           Invert the colors: draw a light-on-dark code
 
 Text rendering:
   -g, --glyphs <SET>  Glyph set used to pack modules into character cells: half (h; 1x2 modules per cell, most robust), quadrant (q; 2x2), or braille (b; 2x4, densest) [default: half]
@@ -149,7 +153,7 @@ qrtxt --border 1 "hello"
 # denser packing for narrow terminals
 qrtxt --mode text --glyphs braille "hello"
 
-# light-background terminal
+# light-on-dark instead of the default dark-on-light
 qrtxt --invert "hello"
 
 # split automatically, capping each code at 500 bytes
@@ -184,7 +188,7 @@ inconsistently, so prefer printable ASCII where you can.
 |---|---|---|
 | `auto` (default) | — | A bitmap when the terminal supports one, otherwise Unicode block glyphs. |
 | `text` | characters | Unicode block glyphs (the glyph set applies). |
-| `ansi` | characters | Reverse-video escape codes; wider, for terminals without block glyphs. |
+| `ansi` | characters | Black-on-white escape codes; wider, for terminals without block glyphs. |
 | `kitty` | bitmap | A black-and-white bitmap via the Kitty graphics protocol. |
 | `sixel` | bitmap | The same bitmap via the Sixel graphics protocol. |
 
@@ -210,10 +214,16 @@ Each glyph set also accepts its first letter (`-g h`, `-g q`, `-g b`).
 
 ## Dark and light terminals
 
-Block characters are drawn in the terminal's **foreground** color, so the default
-output assumes a dark-background terminal. On a light-background terminal the
-code would appear inverted, so pass `--invert` to restore a scannable
-dark-on-light code. `qrtxt` never queries the terminal background itself.
+The character renderers (`text` and `ansi`) set explicit colors: the field — the
+light modules and the quiet zone — is white and the dark modules are black. The
+code is therefore a self-contained dark-on-white image that scans whatever the
+terminal's own background and colors are, including a **black-background**
+terminal, where a renderer that borrowed the terminal colors would leave the quiet
+zone dark. Pass `--invert` to swap the two colors and get a light-on-dark code
+instead. The bitmap modes carry their own white quiet zone the same way. `qrtxt`
+never queries the terminal background itself. These color codes are part of the text
+output, so a piped or redirected `text`/`ansi` run carries them too — strip them if
+you need plain glyphs.
 
 ## Kitty graphics protocol
 
@@ -288,7 +298,7 @@ A closed downstream pipe (for example `qrtxt ... | head`) is treated as success.
 ## How it works
 
 ```text
-argv / stdin -> input::resolve -> encode::encode_multi -> render::build_ink -> render::render -> stdout
+argv / stdin -> input::resolve -> encode::encode_multi -> render::build_ink -> render::render_on_field -> stdout
 ```
 
 The crate is layered so that dependencies point in one direction only:
@@ -305,11 +315,13 @@ The crate is layered so that dependencies point in one direction only:
 
 Rendering happens in two steps: `build_ink` turns a `Symbol` into a boolean "ink"
 grid (applying the quiet zone and inversion), and `render` packs that grid into
-character cells per glyph set. `render_kitty` and `render_sixel` bypass the grid
-and emit a black-and-white bitmap over the Kitty or Sixel protocol. The round-trip
-test suite renders the output, reconstructs the module grid, and decodes it again
-— with `rqrr` for QR and the `datamatrix` crate for Data Matrix — to prove the
-printed code is still scannable.
+character cells per glyph set. `render_on_field` wraps those glyphs in explicit
+colors so dark modules print black on a white field, and `render_ansi` paints the
+same grid with escape codes. `render_kitty` and `render_sixel` bypass the grid and
+emit a black-and-white bitmap over the Kitty or Sixel protocol. The round-trip test
+suite renders the output, strips the colour codes, reconstructs the module grid, and
+decodes it again — with `rqrr` for QR and the `datamatrix` crate for Data Matrix — to
+prove the printed code is still scannable.
 
 ## License
 
