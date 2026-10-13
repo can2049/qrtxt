@@ -4,13 +4,18 @@
 //! graphics capability probes live in [`probe`] and the `--help` hint plumbing in
 //! [`help`]. Their public items are re-exported below so callers keep using the
 //! `cli::` path.
+//!
+//! The CLI is a subcommand per symbology (`qr` / `datamatrix`), so each format
+//! exposes only the options it understands; the options shared by every format
+//! live in [`CommonArgs`].
 
 use std::io::{IsTerminal, Write};
+use std::path::PathBuf;
 
-use clap::Parser;
+use clap::{Args, Parser, Subcommand};
 
 use crate::error::AppError;
-use crate::types::{Config, Ec, Format, GlyphSet, InputSpec, Mode, RenderMode};
+use crate::types::{Config, Ec, EncodeOptions, GlyphSet, InputSpec, Mode, RenderMode};
 
 mod help;
 mod parse;
@@ -19,7 +24,7 @@ mod probe;
 pub use help::{add_mode_hint, mode_support_hint};
 pub use parse::parse;
 
-/// Turn text into a terminal QR code.
+/// Turn text into a terminal QR code or Data Matrix.
 #[derive(Debug, Parser)]
 #[command(
     name = "qrtxt",
@@ -27,53 +32,77 @@ pub use parse::parse;
     about = "Turn text into a terminal QR code or Data Matrix",
     long_about = "Turn text into a terminal QR code or Data Matrix.\n\n\
 Reads a payload from a literal argument, a file, or standard input and prints it as one or \
-more symbols. --format chooses a QR code (the default) or a Data Matrix (ECC 200) symbol. \
-By default the best rendering the terminal offers is used: a crisp bitmap over the Kitty or \
-Sixel graphics protocol where supported, otherwise Unicode block characters, so a plain UTF-8 \
-terminal always works. Use --mode to force a specific renderer.\n\n\
+more symbols. The subcommand chooses the symbology: `qr` draws an ordinary QR code and \
+`datamatrix` draws a Data Matrix (ECC 200) symbol. By default the best rendering the terminal \
+offers is used: a crisp bitmap over the Kitty or Sixel graphics protocol where supported, \
+otherwise Unicode block characters, so a plain UTF-8 terminal always works. Use --mode to \
+force a specific renderer.\n\n\
 A payload too large for a single symbol is split automatically across several balanced \
-symbols, printed in order under a `QR Code i/N` (or `Data Matrix i/N`) caption. Use --max-bytes to cap the \
-bytes per symbol, or --chunk to require a minimum number of symbols.",
+symbols, printed in order under a `QR Code i/N` (or `Data Matrix i/N`) caption. Use --max-bytes \
+to cap the bytes per symbol, or --chunk to require a minimum number of symbols.",
     after_help = "Source: https://github.com/can2049/qrtxt"
 )]
 pub struct Cli {
+    /// The options shared by every subcommand, also listed in the top-level help.
+    ///
+    /// These are `global`, so they are accepted before or after the subcommand and
+    /// appear under both `qrtxt -h` and `qrtxt <command> -h`; the per-subcommand
+    /// copies exist only to be displayed there, and the values are read from the
+    /// chosen subcommand.
+    #[command(flatten)]
+    common: CommonArgs,
+
+    /// The symbology to produce.
+    #[command(subcommand)]
+    command: Command,
+}
+
+/// The symbology to produce, one subcommand per format.
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Encode a QR code.
+    Qr(QrArgs),
+    /// Encode a Data Matrix (ECC 200) symbol.
+    #[command(visible_alias = "dm")]
+    Datamatrix(DatamatrixArgs),
+}
+
+/// Options shared by every subcommand.
+#[derive(Debug, Args)]
+struct CommonArgs {
     /// Literal payload to encode.
     ///
     /// Used exactly as given (no trailing-newline stripping). When omitted, the
     /// payload is read from --file, or from standard input when no file is given.
     #[arg(value_name = "DATA", help_heading = "Payload")]
-    pub data: Option<String>,
+    data: Option<String>,
 
-    /// Barcode format to draw: qr code (qr) or datamatrix (dm).
+    /// Read the payload from a file.
     ///
-    /// `qr code` (the default; the short alias `qr` also works) draws a QR code.
-    /// `datamatrix` (or `dm`) draws a Data Matrix (ECC 200) symbol, which is
-    /// always square. Data Matrix error correction is fixed by the symbol size, so
-    /// --error-correction does not apply to it; and a Data Matrix holds far less
-    /// data per symbol, so a large payload splits into more codes.
+    /// The file is read as raw bytes. One trailing newline (LF or CRLF) is removed
+    /// unless --preserve-newline is set. Cannot be combined with a positional DATA.
     #[arg(
-        short = 'F',
-        long = "format",
-        value_name = "FORMAT",
-        default_value = "qr code",
-        help_heading = "Encoding"
+        short = 'f',
+        long = "file",
+        value_name = "PATH",
+        conflicts_with = "data",
+        global = true,
+        help_heading = "Payload"
     )]
-    pub format: Format,
+    file: Option<PathBuf>,
 
-    /// Error-correction level: L (about 7% recoverable), M (15%), Q (25%), or H
-    /// (30%).
+    /// Keep one trailing newline from file or piped input.
     ///
-    /// A higher level recovers from more damage but holds less data, which can
-    /// force the symbol to a larger version. The level is never boosted
-    /// automatically, and the value is case-insensitive.
+    /// By default exactly one trailing newline (LF or CRLF) is stripped from file
+    /// and standard-input payloads; this flag keeps it. A literal DATA argument is
+    /// never stripped.
     #[arg(
-        short = 'e',
-        long = "error-correction",
-        value_name = "LEVEL",
-        default_value = "L",
-        help_heading = "Encoding"
+        short = 'p',
+        long = "preserve-newline",
+        global = true,
+        help_heading = "Payload"
     )]
-    pub error: Ec,
+    preserve_newline: bool,
 
     /// Cap the payload of each symbol at BYTES bytes; implies splitting (default:
     /// the symbol's own limit).
@@ -87,9 +116,10 @@ pub struct Cli {
         long = "max-bytes",
         value_name = "BYTES",
         value_parser = clap::value_parser!(u32).range(1..),
+        global = true,
         help_heading = "Encoding"
     )]
-    pub max_bytes: Option<u32>,
+    max_bytes: Option<u32>,
 
     /// Split the payload across at least COUNT symbols; advisory (default: no
     /// minimum).
@@ -103,9 +133,10 @@ pub struct Cli {
         long = "chunk",
         value_name = "COUNT",
         value_parser = clap::value_parser!(u32).range(1..),
+        global = true,
         help_heading = "Encoding"
     )]
-    pub chunk: Option<u32>,
+    chunk: Option<u32>,
 
     /// How to draw the code: auto, text, ansi, kitty, or sixel.
     ///
@@ -121,30 +152,10 @@ pub struct Cli {
         long = "mode",
         value_name = "MODE",
         default_value = "auto",
+        global = true,
         help_heading = "Rendering"
     )]
-    pub mode: Mode,
-
-    /// Read the payload from a file.
-    ///
-    /// The file is read as raw bytes. One trailing newline (LF or CRLF) is removed
-    /// unless --preserve-newline is set. Cannot be combined with a positional DATA.
-    #[arg(
-        short = 'f',
-        long = "file",
-        value_name = "PATH",
-        conflicts_with = "data",
-        help_heading = "Payload"
-    )]
-    pub file: Option<std::path::PathBuf>,
-
-    /// Keep one trailing newline from file or piped input.
-    ///
-    /// By default exactly one trailing newline (LF or CRLF) is stripped from file
-    /// and standard-input payloads; this flag keeps it. A literal DATA argument is
-    /// never stripped.
-    #[arg(short = 'p', long = "preserve-newline", help_heading = "Payload")]
-    pub preserve_newline: bool,
+    mode: Mode,
 
     /// Quiet-zone width in modules; 0 removes the margin.
     ///
@@ -154,9 +165,10 @@ pub struct Cli {
         short = 'b',
         long = "border",
         default_value_t = 4,
+        global = true,
         help_heading = "Rendering"
     )]
-    pub border: u32,
+    border: u32,
 
     /// Invert the colors: draw a light-on-dark code instead of dark-on-light.
     ///
@@ -164,8 +176,13 @@ pub struct Cli {
     /// self-contained dark-on-white image that scans on any terminal. Pass this to
     /// swap them for a light-on-dark code. In the bitmap modes it swaps the two
     /// colors too.
-    #[arg(short = 'i', long = "invert", help_heading = "Rendering")]
-    pub invert: bool,
+    #[arg(
+        short = 'i',
+        long = "invert",
+        global = true,
+        help_heading = "Rendering"
+    )]
+    invert: bool,
 
     /// Glyph set used to pack modules into character cells: half (h; 1x2 modules
     /// per cell, most robust), quadrant (q; 2x2), or braille (b; 2x4, densest).
@@ -178,9 +195,69 @@ pub struct Cli {
         long = "glyphs",
         value_name = "SET",
         default_value = "half",
+        global = true,
         help_heading = "Text rendering"
     )]
-    pub glyphs: GlyphSet,
+    glyphs: GlyphSet,
+}
+
+impl CommonArgs {
+    /// Build the shared parts of a [`Config`], leaving `encode` to the subcommand.
+    fn to_config(&self, mode: RenderMode, encode: EncodeOptions) -> Config {
+        let input = match (&self.data, &self.file) {
+            (Some(text), _) => InputSpec::Literal(text.clone()),
+            (None, Some(path)) => InputSpec::File(path.clone()),
+            (None, None) => InputSpec::Stdin,
+        };
+        Config {
+            input,
+            encode,
+            border: self.border,
+            invert: self.invert,
+            glyphs: self.glyphs,
+            mode,
+            preserve_newline: self.preserve_newline,
+            max_bytes: self.max_bytes.map(|bytes| bytes as usize),
+            min_chunks: self.chunk.map(|count| count as usize),
+        }
+    }
+
+    /// The requested render [`Mode`], before `auto` is resolved.
+    fn mode(&self) -> Mode {
+        self.mode
+    }
+}
+
+/// Options for the `qr` subcommand.
+#[derive(Debug, Args)]
+struct QrArgs {
+    #[command(flatten)]
+    common: CommonArgs,
+
+    /// Error-correction level: L (about 7% recoverable), M (15%), Q (25%), or H
+    /// (30%).
+    ///
+    /// A higher level recovers from more damage but holds less data, which can
+    /// force the symbol to a larger version. The level is never boosted
+    /// automatically, and the value is case-insensitive.
+    #[arg(
+        short = 'e',
+        long = "error-correction",
+        value_name = "LEVEL",
+        default_value = "L",
+        help_heading = "Encoding"
+    )]
+    error: Ec,
+}
+
+/// Options for the `datamatrix` subcommand.
+///
+/// Data Matrix exposes no encoding options: its error correction is fixed by the
+/// symbol size, so there is no `--error-correction` here.
+#[derive(Debug, Args)]
+struct DatamatrixArgs {
+    #[command(flatten)]
+    common: CommonArgs,
 }
 
 impl Cli {
@@ -192,29 +269,26 @@ impl Cli {
     /// pure and leaves a single source of truth for `Mode` -> [`RenderMode`].
     #[must_use]
     pub fn to_config(&self, mode: RenderMode) -> Config {
-        let input = match (&self.data, &self.file) {
-            (Some(text), _) => InputSpec::Literal(text.clone()),
-            (None, Some(path)) => InputSpec::File(path.clone()),
-            (None, None) => InputSpec::Stdin,
-        };
-        Config {
-            input,
-            ec: self.error,
-            format: self.format,
-            border: self.border,
-            invert: self.invert,
-            glyphs: self.glyphs,
-            mode,
-            preserve_newline: self.preserve_newline,
-            max_bytes: self.max_bytes.map(|bytes| bytes as usize),
-            min_chunks: self.chunk.map(|count| count as usize),
+        match &self.command {
+            Command::Qr(args) => args
+                .common
+                .to_config(mode, EncodeOptions::Qr { ec: args.error }),
+            Command::Datamatrix(args) => args.common.to_config(mode, EncodeOptions::DataMatrix),
+        }
+    }
+
+    /// The requested render [`Mode`], before `auto` is resolved.
+    fn mode(&self) -> Mode {
+        match &self.command {
+            Command::Qr(args) => args.common.mode(),
+            Command::Datamatrix(args) => args.common.mode(),
         }
     }
 }
 
 /// Default entry point: reads global stdin/stdout and TTY state.
 pub fn run_with(cli: &Cli) -> Result<(), AppError> {
-    let cfg = cli.to_config(resolve_mode(cli.mode)?);
+    let cfg = cli.to_config(resolve_mode(cli.mode())?);
     let mut stdin = std::io::stdin().lock();
     let mut stdout = std::io::stdout().lock();
     let stdin_is_tty = std::io::stdin().is_terminal();
@@ -255,8 +329,7 @@ pub fn run(
     stdin_is_tty: bool,
 ) -> Result<(), AppError> {
     let payload = crate::input::resolve(&cfg.input, cfg.preserve_newline, stdin, stdin_is_tty)?;
-    let codes =
-        crate::encode::encode_multi(&payload, cfg.format, cfg.ec, cfg.max_bytes, cfg.min_chunks)?;
+    let codes = crate::encode::encode_multi(&payload, &cfg.encode, cfg.max_bytes, cfg.min_chunks)?;
 
     let mut writer = std::io::BufWriter::new(stdout);
     let options = crate::render::RenderOptions {
@@ -265,7 +338,7 @@ pub fn run(
         glyphs: cfg.glyphs,
     };
     if let Err(error) =
-        crate::render::render_all(&codes, cfg.format, cfg.mode, options, &mut writer)
+        crate::render::render_all(&codes, cfg.encode.format(), cfg.mode, options, &mut writer)
     {
         return map_write_error(error);
     }
@@ -290,6 +363,7 @@ fn map_write_error(error: std::io::Error) -> Result<(), AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::Format;
 
     fn parse(args: &[&str]) -> Cli {
         // The first element is argv[0] (the program name).
@@ -304,96 +378,110 @@ mod tests {
         parse(args).to_config(RenderMode::Compact)
     }
 
+    /// The QR error level in `cfg`, failing if it is not a QR config.
+    fn qr_ec(cfg: &Config) -> Ec {
+        match cfg.encode {
+            EncodeOptions::Qr { ec } => ec,
+            EncodeOptions::DataMatrix => panic!("expected QR options"),
+        }
+    }
+
     #[test]
     fn literal_takes_precedence_over_stdin() {
-        let cfg = config(&["hello"]);
+        let cfg = config(&["qr", "hello"]);
         assert_eq!(cfg.input, InputSpec::Literal("hello".to_string()));
     }
 
     #[test]
     fn file_input() {
-        let cfg = config(&["--file", "payload.txt"]);
+        let cfg = config(&["qr", "--file", "payload.txt"]);
         assert_eq!(cfg.input, InputSpec::File("payload.txt".into()));
     }
 
     #[test]
     fn no_source_means_stdin() {
-        assert_eq!(config(&[]).input, InputSpec::Stdin);
+        assert_eq!(config(&["qr"]).input, InputSpec::Stdin);
     }
 
     #[test]
     fn file_and_literal_conflict() {
-        assert!(Cli::try_parse_from(["qrtxt", "--file", "a.txt", "hello"]).is_err());
+        assert!(Cli::try_parse_from(["qrtxt", "qr", "--file", "a.txt", "hello"]).is_err());
     }
 
     #[test]
     fn invalid_values_are_rejected() {
-        assert!(Cli::try_parse_from(["qrtxt", "--error-correction", "Z", "x"]).is_err());
-        assert!(Cli::try_parse_from(["qrtxt", "--glyphs", "dense", "x"]).is_err());
+        assert!(Cli::try_parse_from(["qrtxt", "qr", "--error-correction", "Z", "x"]).is_err());
+        assert!(Cli::try_parse_from(["qrtxt", "qr", "--glyphs", "dense", "x"]).is_err());
     }
 
     #[test]
     fn defaults_and_flags() {
-        let cli = parse(&["x", "--mode", "ansi", "--invert", "--glyphs", "braille"]);
-        assert_eq!(cli.mode, Mode::Ansi);
+        let cli = parse(&[
+            "qr", "x", "--mode", "ansi", "--invert", "--glyphs", "braille",
+        ]);
+        assert_eq!(cli.mode(), Mode::Ansi);
         let cfg = cli.to_config(RenderMode::Ansi);
         assert!(cfg.invert);
         assert_eq!(cfg.glyphs, GlyphSet::Braille);
         assert_eq!(cfg.border, 4);
         assert_eq!(cfg.max_bytes, None);
-        assert_eq!(cfg.ec, Ec::L);
+        assert_eq!(qr_ec(&cfg), Ec::L);
     }
 
     #[test]
     fn short_flags_resolve() {
         let cli = parse(&[
-            "-p", "-i", "-M", "ansi", "-g", "half", "-e", "H", "-b", "2", "-m", "9", "x",
+            "qr", "-p", "-i", "-M", "ansi", "-g", "half", "-e", "H", "-b", "2", "-m", "9", "x",
         ]);
-        assert_eq!(cli.mode, Mode::Ansi);
+        assert_eq!(cli.mode(), Mode::Ansi);
         let cfg = cli.to_config(RenderMode::Ansi);
         assert!(cfg.preserve_newline);
         assert!(cfg.invert);
         assert_eq!(cfg.glyphs, GlyphSet::Half);
-        assert_eq!(cfg.ec, Ec::H);
+        assert_eq!(qr_ec(&cfg), Ec::H);
         assert_eq!(cfg.border, 2);
         assert_eq!(cfg.max_bytes, Some(9));
     }
 
     #[test]
     fn max_bytes_defaults_to_none() {
-        assert_eq!(config(&["x"]).max_bytes, None);
+        assert_eq!(config(&["qr", "x"]).max_bytes, None);
     }
 
     #[test]
     fn max_bytes_parses_long_and_short() {
-        assert_eq!(config(&["--max-bytes", "100", "x"]).max_bytes, Some(100));
-        assert_eq!(config(&["-m", "100", "x"]).max_bytes, Some(100));
+        assert_eq!(
+            config(&["qr", "--max-bytes", "100", "x"]).max_bytes,
+            Some(100)
+        );
+        assert_eq!(config(&["qr", "-m", "100", "x"]).max_bytes, Some(100));
     }
 
     #[test]
     fn max_bytes_zero_is_rejected() {
-        assert!(Cli::try_parse_from(["qrtxt", "--max-bytes", "0", "x"]).is_err());
+        assert!(Cli::try_parse_from(["qrtxt", "qr", "--max-bytes", "0", "x"]).is_err());
     }
 
     #[test]
     fn chunk_defaults_to_none() {
-        assert_eq!(config(&["x"]).min_chunks, None);
+        assert_eq!(config(&["qr", "x"]).min_chunks, None);
     }
 
     #[test]
     fn chunk_parses_long_and_short() {
-        assert_eq!(config(&["--chunk", "3", "x"]).min_chunks, Some(3));
-        assert_eq!(config(&["-c", "3", "x"]).min_chunks, Some(3));
+        assert_eq!(config(&["qr", "--chunk", "3", "x"]).min_chunks, Some(3));
+        assert_eq!(config(&["qr", "-c", "3", "x"]).min_chunks, Some(3));
     }
 
     #[test]
     fn chunk_zero_is_rejected() {
-        assert!(Cli::try_parse_from(["qrtxt", "--chunk", "0", "x"]).is_err());
+        assert!(Cli::try_parse_from(["qrtxt", "qr", "--chunk", "0", "x"]).is_err());
     }
 
     #[test]
     fn long_flags_resolve() {
         let cli = parse(&[
+            "qr",
             "--preserve-newline",
             "--invert",
             "--mode",
@@ -410,12 +498,12 @@ mod tests {
             "4",
             "x",
         ]);
-        assert_eq!(cli.mode, Mode::Ansi);
+        assert_eq!(cli.mode(), Mode::Ansi);
         let cfg = cli.to_config(RenderMode::Ansi);
         assert!(cfg.preserve_newline);
         assert!(cfg.invert);
         assert_eq!(cfg.glyphs, GlyphSet::Quadrant);
-        assert_eq!(cfg.ec, Ec::Q);
+        assert_eq!(qr_ec(&cfg), Ec::Q);
         assert_eq!(cfg.border, 1);
         assert_eq!(cfg.max_bytes, Some(7));
         assert_eq!(cfg.min_chunks, Some(4));
@@ -423,16 +511,18 @@ mod tests {
 
     #[test]
     fn removed_options_are_rejected() {
-        let cases: [&[&str]; 9] = [
-            &["qrtxt", "--raw", "x"],
-            &["qrtxt", "--ansi", "x"],
-            &["qrtxt", "--ec", "x"],
-            &["qrtxt", "--pad", "x"],
-            &["qrtxt", "--size", "2", "x"],
-            &["qrtxt", "--multi", "x"],
-            &["qrtxt", "--no-compact", "x"],
-            &["qrtxt", "--kitty", "x"],
-            &["qrtxt", "--sixel", "x"],
+        let cases: [&[&str]; 10] = [
+            &["qrtxt", "qr", "--raw", "x"],
+            &["qrtxt", "qr", "--ansi", "x"],
+            &["qrtxt", "qr", "--ec", "x"],
+            &["qrtxt", "qr", "--pad", "x"],
+            &["qrtxt", "qr", "--size", "2", "x"],
+            &["qrtxt", "qr", "--multi", "x"],
+            &["qrtxt", "qr", "--no-compact", "x"],
+            &["qrtxt", "qr", "--kitty", "x"],
+            &["qrtxt", "qr", "--sixel", "x"],
+            // The old flat format selector is gone: the subcommand picks the format.
+            &["qrtxt", "qr", "--format", "dm", "x"],
         ];
         for args in cases {
             assert!(
@@ -444,21 +534,21 @@ mod tests {
 
     #[test]
     fn mode_flag_selects_kitty() {
-        assert_eq!(parse(&["--mode", "kitty", "x"]).mode, Mode::Kitty);
-        assert_eq!(parse(&["-M", "kitty", "x"]).mode, Mode::Kitty);
-        assert_ne!(parse(&["x"]).mode, Mode::Kitty);
+        assert_eq!(parse(&["qr", "--mode", "kitty", "x"]).mode(), Mode::Kitty);
+        assert_eq!(parse(&["qr", "-M", "kitty", "x"]).mode(), Mode::Kitty);
+        assert_ne!(parse(&["qr", "x"]).mode(), Mode::Kitty);
     }
 
     #[test]
     fn mode_flag_selects_sixel() {
-        assert_eq!(parse(&["--mode", "sixel", "x"]).mode, Mode::Sixel);
-        assert_eq!(parse(&["-M", "sixel", "x"]).mode, Mode::Sixel);
-        assert_ne!(parse(&["x"]).mode, Mode::Sixel);
+        assert_eq!(parse(&["qr", "--mode", "sixel", "x"]).mode(), Mode::Sixel);
+        assert_eq!(parse(&["qr", "-M", "sixel", "x"]).mode(), Mode::Sixel);
+        assert_ne!(parse(&["qr", "x"]).mode(), Mode::Sixel);
     }
 
     #[test]
     fn mode_defaults_to_auto() {
-        assert_eq!(parse(&["x"]).mode, Mode::Auto);
+        assert_eq!(parse(&["qr", "x"]).mode(), Mode::Auto);
     }
 
     #[test]
@@ -472,28 +562,29 @@ mod tests {
     #[test]
     fn to_config_uses_the_resolved_mode() {
         assert_eq!(
-            parse(&["x"]).to_config(RenderMode::Sixel).mode,
+            parse(&["qr", "x"]).to_config(RenderMode::Sixel).mode,
             RenderMode::Sixel
         );
     }
 
     #[test]
     fn mode_rejects_unknown_value() {
-        assert!(Cli::try_parse_from(["qrtxt", "--mode", "dense", "x"]).is_err());
+        assert!(Cli::try_parse_from(["qrtxt", "qr", "--mode", "dense", "x"]).is_err());
     }
 
     #[test]
-    fn format_flag_selects_datamatrix() {
+    fn datamatrix_subcommand_selects_datamatrix() {
         assert_eq!(
-            config(&["--format", "datamatrix", "x"]).format,
-            Format::DataMatrix
+            config(&["datamatrix", "x"]).encode,
+            EncodeOptions::DataMatrix
         );
-        assert_eq!(config(&["-F", "dm", "x"]).format, Format::DataMatrix);
-        assert_eq!(config(&["x"]).format, Format::Qr);
+        assert_eq!(config(&["dm", "x"]).encode, EncodeOptions::DataMatrix);
+        assert_eq!(config(&["qr", "x"]).encode.format(), Format::Qr);
     }
 
     #[test]
-    fn format_rejects_unknown_value() {
-        assert!(Cli::try_parse_from(["qrtxt", "--format", "pdf417", "x"]).is_err());
+    fn datamatrix_subcommand_rejects_error_correction() {
+        // Data Matrix has no error-correction option; `-e` is a QR-only flag.
+        assert!(Cli::try_parse_from(["qrtxt", "datamatrix", "-e", "H", "x"]).is_err());
     }
 }

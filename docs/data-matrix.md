@@ -2,6 +2,10 @@
 
 > `qrtxt --format datamatrix` 输出 **Data Matrix(ECC 200)** 二维条码,与 QR 码并列。
 > 状态:已实现并提交(分支 `data-matrix`),测试全绿。
+>
+> **后续变更**:`--format` 选择器已被 `qr` / `datamatrix` 子命令取代
+> (`qrtxt datamatrix ...`)。本文保留当时的 `--format` 表述作为该次改动的历史记录,
+> 当前的命令行形态以 [`README.md`](../README.md) 为准。
 
 **动机**:调研「能否支持 Data Matrix 输出」。结论是可行,但需要先把与 `qrcode` 紧耦合的
 渲染层解耦,再接入第二种符号。本文记录调研 → 架构 → 实现 → 验证的完整设计过程。

@@ -31,11 +31,35 @@ fn describe(support: Option<&Capabilities>) -> Option<String> {
     })
 }
 
-/// `command` with the live support `hint` appended to the `--mode` option's help
+/// `command` with the live support `hint` appended to every `--mode` option help
 /// (FR-3.10).
+///
+/// `--mode` is a shared option: it is listed both at the top level and on each
+/// symbology's subcommand, so the hint is injected wherever it appears (the
+/// auto-generated `help` subcommand does not carry it, and is left alone).
 #[must_use]
 pub fn add_mode_hint(command: Command, hint: &str) -> Command {
-    with_hint(command, "mode", hint)
+    let names: Vec<String> = command
+        .get_subcommands()
+        .map(|sub| sub.get_name().to_string())
+        .collect();
+    let command = with_hint_if_present(command, "mode", hint);
+    names.into_iter().fold(command, |command, name| {
+        command.mut_subcommand(name, |sub| with_hint_if_present(sub, "mode", hint))
+    })
+}
+
+/// Append `hint` to `name`'s short and long help, but only when `command`
+/// actually defines that option.
+fn with_hint_if_present(command: Command, name: &str, hint: &str) -> Command {
+    if command
+        .get_arguments()
+        .any(|arg| arg.get_id().as_str() == name)
+    {
+        with_hint(command, name, hint)
+    } else {
+        command
+    }
 }
 
 /// Append `hint` to the short and long help of the `option` named `name`.
@@ -103,12 +127,18 @@ mod tests {
         let hint = "auto: this terminal supports the Kitty graphics protocol.";
         let mut command = add_mode_hint(Cli::command(), hint);
 
-        let short = command.render_help().to_string();
+        // The hint lands on the top-level `--mode` and on each subcommand's.
+        let top = command.render_help().to_string();
+        assert!(top.contains("--mode"), "{top}");
+        assert!(top.contains(". auto: this terminal"), "{top}");
+
+        let qr = command.find_subcommand_mut("qr").expect("qr subcommand");
+        let short = qr.render_help().to_string();
         assert!(short.contains("--mode"), "{short}");
         // The stripped stop is restored so the hint starts a new sentence.
         assert!(short.contains(". auto: this terminal"), "{short}");
 
-        let long = command.render_long_help().to_string();
+        let long = qr.render_long_help().to_string();
         assert!(long.contains("--mode"), "{long}");
         assert!(long.contains(hint), "{long}");
     }

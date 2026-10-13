@@ -11,7 +11,7 @@ use qrcode::types::{Mode, QrError};
 use qrcode::{Color, EcLevel, QrCode, Version};
 
 use crate::error::AppError;
-use crate::types::{Ec, Format, Symbol};
+use crate::types::{Ec, EncodeOptions, Symbol};
 
 /// ECI designator for UTF-8 (ISO/IEC 18004 assignment 26).
 const UTF8_ECI: u32 = 26;
@@ -218,7 +218,8 @@ pub fn encode(data: &[u8], ec: Ec) -> Result<Symbol, AppError> {
     QrCodec { ec }.encode(data)
 }
 
-/// Encode `data` in `format`, splitting it across as many symbols as needed.
+/// Encode `data` in the symbology selected by `encode`, splitting it across as
+/// many symbols as needed.
 ///
 /// Each symbol holds at most `max_bytes` payload bytes (when `None`, the most a
 /// single symbol can hold; a value below 1 is treated as 1), and the payload is
@@ -229,16 +230,18 @@ pub fn encode(data: &[u8], ec: Ec) -> Result<Symbol, AppError> {
 /// symbols. A payload that is within every limit yields a single symbol.
 pub fn encode_multi(
     data: &[u8],
-    format: Format,
-    ec: Ec,
+    encode: &EncodeOptions,
     max_bytes: Option<usize>,
     min_chunks: Option<usize>,
 ) -> Result<Vec<Symbol>, AppError> {
-    let qr = QrCodec { ec };
+    let qr;
     let datamatrix = DataMatrixCodec;
-    let codec: &dyn Codec = match format {
-        Format::Qr => &qr,
-        Format::DataMatrix => &datamatrix,
+    let codec: &dyn Codec = match encode {
+        EncodeOptions::Qr { ec } => {
+            qr = QrCodec { ec: *ec };
+            &qr
+        }
+        EncodeOptions::DataMatrix => &datamatrix,
     };
     split_chunks_with(codec, data, max_bytes, min_chunks)
         .into_iter()
@@ -380,6 +383,11 @@ fn max_prefix_fitting(codec: &dyn Codec, data: &[u8]) -> usize {
 mod tests {
     use super::*;
 
+    /// QR encode options at error level `ec`, for the tests.
+    fn qr(ec: Ec) -> EncodeOptions {
+        EncodeOptions::Qr { ec }
+    }
+
     #[test]
     fn encodes_with_exact_error_level() {
         for ec in [Ec::L, Ec::M, Ec::Q, Ec::H] {
@@ -414,7 +422,7 @@ mod tests {
     #[test]
     fn multi_keeps_a_fitting_payload_as_one_code() {
         assert_eq!(
-            encode_multi(b"hello", Format::Qr, Ec::M, None, None)
+            encode_multi(b"hello", &qr(Ec::M), None, None)
                 .unwrap()
                 .len(),
             1
@@ -423,7 +431,7 @@ mod tests {
 
     #[test]
     fn datamatrix_encodes_a_square_symbol() {
-        let symbols = encode_multi(b"hello", Format::DataMatrix, Ec::L, None, None).unwrap();
+        let symbols = encode_multi(b"hello", &EncodeOptions::DataMatrix, None, None).unwrap();
         assert_eq!(symbols.len(), 1);
         assert_eq!(symbols[0].width(), symbols[0].height(), "must be square");
     }
@@ -434,8 +442,7 @@ mod tests {
         assert!(
             encode_multi(
                 "你好，世界".as_bytes(),
-                Format::DataMatrix,
-                Ec::L,
+                &EncodeOptions::DataMatrix,
                 None,
                 None
             )
@@ -445,7 +452,8 @@ mod tests {
 
     #[test]
     fn datamatrix_splits_an_oversized_payload() {
-        let codes = encode_multi(&vec![b'a'; 4000], Format::DataMatrix, Ec::L, None, None).unwrap();
+        let codes =
+            encode_multi(&vec![b'a'; 4000], &EncodeOptions::DataMatrix, None, None).unwrap();
         assert!(codes.len() > 1, "expected more than one symbol");
     }
 
@@ -469,7 +477,7 @@ mod tests {
 
     #[test]
     fn multi_splits_an_oversized_payload() {
-        let codes = encode_multi(&vec![b'x'; 4000], Format::Qr, Ec::L, None, None).unwrap();
+        let codes = encode_multi(&vec![b'x'; 4000], &qr(Ec::L), None, None).unwrap();
         assert!(codes.len() > 1, "expected more than one code");
     }
 
@@ -569,7 +577,7 @@ mod tests {
 
     #[test]
     fn encode_multi_honors_max_bytes() {
-        let codes = encode_multi(&vec![b'a'; 250], Format::Qr, Ec::L, Some(100), None).unwrap();
+        let codes = encode_multi(&vec![b'a'; 250], &qr(Ec::L), Some(100), None).unwrap();
         assert_eq!(codes.len(), 3);
     }
 
@@ -578,10 +586,10 @@ mod tests {
         // Regression: a zero cap used to reach `div_ceil(0)` and panic. It is
         // floored to one byte, so the payload still splits (one byte, or one
         // whole character, per code) and no character is divided.
-        let ascii = encode_multi(b"abc", Format::Qr, Ec::L, Some(0), None).unwrap();
+        let ascii = encode_multi(b"abc", &qr(Ec::L), Some(0), None).unwrap();
         assert_eq!(ascii.len(), 3, "one byte per code");
 
-        let cjk = encode_multi("汉字".as_bytes(), Format::Qr, Ec::L, Some(0), None).unwrap();
+        let cjk = encode_multi("汉字".as_bytes(), &qr(Ec::L), Some(0), None).unwrap();
         assert_eq!(cjk.len(), 2, "one whole character per code");
     }
 
