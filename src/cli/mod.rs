@@ -41,18 +41,18 @@ pub struct Cli {
     #[arg(value_name = "DATA", help_heading = "Payload")]
     pub data: Option<String>,
 
-    /// Barcode format to draw: qr or datamatrix (dm).
+    /// Barcode format to draw: qr code (qr) or datamatrix (dm).
     ///
-    /// `qr` (the default) draws a QR code. `datamatrix` (or `dm`) draws a Data
-    /// Matrix (ECC 200) symbol, which is always square. Data Matrix error
-    /// correction is fixed by the symbol size, so --error-correction does not
-    /// apply to it; and a Data Matrix holds far less data per symbol, so a large
-    /// payload splits into more codes.
+    /// `qr code` (the default; the short alias `qr` also works) draws a QR code.
+    /// `datamatrix` (or `dm`) draws a Data Matrix (ECC 200) symbol, which is
+    /// always square. Data Matrix error correction is fixed by the symbol size, so
+    /// --error-correction does not apply to it; and a Data Matrix holds far less
+    /// data per symbol, so a large payload splits into more codes.
     #[arg(
         short = 'F',
         long = "format",
         value_name = "FORMAT",
-        default_value = "qr",
+        default_value = "qr code",
         help_heading = "Encoding"
     )]
     pub format: Format,

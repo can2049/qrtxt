@@ -99,7 +99,7 @@ Payload:
 
 Encoding:
   -e, --error-correction <LEVEL>  Error-correction level: L (about 7% recoverable), M (15%), Q (25%), or H (30%) [default: L]
-  -F, --format <FORMAT>           Barcode format: qr or datamatrix (dm) [default: qr]
+  -F, --format <FORMAT>           Barcode format: qr code (qr) or datamatrix (dm) [default: "qr code"]
   -m, --max-bytes <BYTES>         Cap the payload of each symbol at BYTES bytes; implies splitting (default: the symbol's own limit)
   -c, --chunk <COUNT>             Split the payload across at least COUNT symbols; advisory (default: no minimum)
 
@@ -170,7 +170,7 @@ drawn. Both formats render through every mode.
 
 | `--format` | Symbol |
 |---|---|
-| `qr` (default) | An ordinary QR code. `--error-correction` applies. |
+| `qr code` (`qr`, default) | An ordinary QR code. `--error-correction` applies. |
 | `datamatrix` (`dm`) | A Data Matrix (ECC 200) symbol, always square. |
 
 A Data Matrix holds far less data per symbol than a QR code (about 1555 bytes
