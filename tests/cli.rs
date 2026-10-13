@@ -260,8 +260,9 @@ fn short_help_lists_the_mode_option_and_its_values() {
 }
 
 #[test]
-fn short_help_documents_the_format_alias() {
+fn short_help_documents_the_format_names_and_aliases() {
     let help = stdout(&["-h"]);
+    assert!(help.contains("qr code (qr)"), "{help}");
     assert!(help.contains("datamatrix (dm)"), "{help}");
 }
 
@@ -277,6 +278,18 @@ fn datamatrix_short_format_is_accepted() {
     assert_eq!(
         stdout(&["-F", "dm", "hello"]),
         stdout(&["--format", "datamatrix", "hello"])
+    );
+}
+
+#[test]
+fn qr_format_name_and_alias_are_equivalent() {
+    assert_eq!(
+        stdout(&["--format", "qr code", "hello"]),
+        stdout(&["--format", "qr", "hello"])
+    );
+    assert_eq!(
+        stdout(&["--format", "qr code", "hello"]),
+        stdout(&["hello"])
     );
 }
 

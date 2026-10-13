@@ -122,7 +122,8 @@ impl FromStr for Mode {
 /// `--format` picks which symbol is produced.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format {
-    /// An ordinary QR code (the default).
+    /// An ordinary QR code (the default); `--format` accepts `"qr code"` or its
+    /// `"qr"` alias.
     Qr,
     /// A Data Matrix (ECC 200) symbol.
     DataMatrix,
@@ -131,12 +132,13 @@ pub enum Format {
 impl FromStr for Format {
     type Err = String;
 
-    /// Parses a case-insensitive format name (`"qr"`, `"datamatrix"`, `"dm"`).
+    /// Parses a case-insensitive format name (`"qr code"`, its `"qr"` alias,
+    /// `"datamatrix"`, `"dm"`).
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_ascii_lowercase().as_str() {
-            "qr" => Ok(Format::Qr),
+            "qr code" | "qr" => Ok(Format::Qr),
             "datamatrix" | "dm" => Ok(Format::DataMatrix),
-            _ => Err(format!("invalid format: {s} (expected qr|datamatrix)")),
+            _ => Err(format!("invalid format: {s} (expected qr code|datamatrix)")),
         }
     }
 }
@@ -272,7 +274,9 @@ mod tests {
 
     #[test]
     fn format_parses_case_insensitively() {
+        assert_eq!("qr code".parse::<Format>(), Ok(Format::Qr));
         assert_eq!("qr".parse::<Format>(), Ok(Format::Qr));
+        assert_eq!("QR Code".parse::<Format>(), Ok(Format::Qr));
         assert_eq!("DataMatrix".parse::<Format>(), Ok(Format::DataMatrix));
         assert_eq!("DM".parse::<Format>(), Ok(Format::DataMatrix));
     }
