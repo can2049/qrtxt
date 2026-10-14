@@ -293,8 +293,12 @@ struct Pdf417Args {
     /// PDF417 stacks its data across a fixed number of columns; fewer columns make
     /// a narrower, taller symbol and more columns a wider, shorter one. Left unset,
     /// the encoder picks a balanced shape. The value must be from 1 to 30.
+    ///
+    /// Also accepted as `-C` and `--cl`.
     #[arg(
+        short = 'C',
         long = "columns",
+        visible_alias = "cl",
         value_name = "N",
         value_parser = clap::value_parser!(u32).range(1..=30),
         help_heading = "Encoding"
@@ -718,6 +722,17 @@ mod tests {
                 columns: None,
             }
         );
+    }
+
+    #[test]
+    fn pdf417_columns_short_and_alias_forms_match_the_long_flag() {
+        let expected = EncodeOptions::Pdf417 {
+            ec: Pdf417Ec(2),
+            columns: Some(5),
+        };
+        assert_eq!(config(&["pdf417", "-C", "5", "x"]).encode, expected);
+        assert_eq!(config(&["pdf417", "--cl", "5", "x"]).encode, expected);
+        assert_eq!(config(&["pdf417", "--columns", "5", "x"]).encode, expected);
     }
 
     #[test]

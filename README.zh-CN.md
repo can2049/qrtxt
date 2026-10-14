@@ -99,7 +99,7 @@ qrtxt <COMMAND> [OPTIONS] [DATA]
 编码:
   -e, --error-correction <LEVEL>  (qr) 纠错等级: L(约可恢复 7%)、M(15%)、Q(25%)、H(30%) [默认: L]
                                   (pdf417) 纠错等级: 0(冗余最少)到 8(最多) [默认: 2]
-      --columns <N>               (pdf417) 强制数据列数(1-30);列数越少,符号越窄越高
+      --columns <N>               (pdf417) 强制数据列数(1-30);列数越少,符号越窄越高 [短: -C,别名: --cl]
   -m, --max-bytes <BYTES>         限制每个符号的负载为 BYTES 字节;会触发拆分(默认: 单个符号自身的上限)
   -c, --chunk <COUNT>             把负载拆分成至少 COUNT 个符号;引导性(默认: 无下限)
 
@@ -143,10 +143,10 @@ qrtxt pdf417 "https://example.com"
 qrtxt pdf417 --error-correction 6 "important payload"
 
 # 更窄更高的 PDF417(适配窄终端)
-qrtxt pdf417 --columns 1 "https://example.com"
+qrtxt pdf417 -C 1 "https://example.com"
 
 # 同上,并把打印宽度减半
-qrtxt pdf417 --columns 1 --mode text --glyphs braille "https://example.com"
+qrtxt pdf417 --cl 1 --mode text --glyphs braille "https://example.com"
 
 # 清晰的黑白位图(需要支持 Kitty 协议的终端)
 qrtxt qr --mode kitty "https://example.com"
@@ -202,7 +202,8 @@ Data Matrix 单个符号能容纳的数据远少于 QR 码(最低纠错等级下
 
 PDF417 符号是一摞行,宽度与高度此消彼长:默认由编码器挑一个均衡的形状,偏宽而扁。
 用 `--columns N`(1–30)可强制数据列数——符号宽 `17 × N + 69` 个模块,`N` 越小越高。
-`--columns 1` 得到最窄最高的符号,数值越大越宽越扁。若只为适配终端宽度,
+`--columns 1` 得到最窄最高的符号,数值越大越宽越扁;也接受缩写 `-C` 与 `--cl`。
+若只为适配终端宽度,
 `--mode text --glyphs quadrant`(或 `braille`)也能把每格塞进两个模块,把打印宽度大致减半。
 
 ## 渲染模式

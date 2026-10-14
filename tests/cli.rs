@@ -371,6 +371,13 @@ fn pdf417_columns_reshape_the_symbol() {
 }
 
 #[test]
+fn pdf417_columns_short_and_alias_forms_work() {
+    let long = stdout(&["pdf417", "--columns", "3", "hello"]);
+    assert_eq!(stdout(&["pdf417", "-C", "3", "hello"]), long);
+    assert_eq!(stdout(&["pdf417", "--cl", "3", "hello"]), long);
+}
+
+#[test]
 fn pdf417_columns_reject_out_of_range_or_bad_values() {
     for columns in ["0", "31", "sixty"] {
         qrtxt()
