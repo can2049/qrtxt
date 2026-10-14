@@ -1001,6 +1001,7 @@ fn pdf417_symbol(payload: &[u8], ec: u8) -> qrtxt::types::Symbol {
 
     let options = EncodeOptions::Pdf417 {
         ec: Pdf417Ec::from_digit(ec).expect("level 0-8"),
+        columns: None,
     };
     let mut codes = qrtxt::encode::encode_multi(payload, &options, None, None).expect("encodes");
     assert_eq!(codes.len(), 1, "payload should fit one symbol");
@@ -1114,6 +1115,16 @@ fn pdf417_higher_error_correction_round_trips() {
     let payload = "redundancy at level six";
     let text = render(&["pdf417", "-e", "6", payload]);
     assert_eq!(decode_pdf417(&text, "half"), payload);
+}
+
+#[test]
+fn pdf417_columns_round_trip() {
+    // Forcing the column count reshapes the symbol; every shape still decodes.
+    let payload = "a payload shaped across a chosen number of columns";
+    for columns in ["1", "2", "5", "12"] {
+        let text = render(&["pdf417", "--columns", columns, payload]);
+        assert_eq!(decode_pdf417(&text, "half"), payload, "columns={columns}");
+    }
 }
 
 #[test]

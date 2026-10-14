@@ -255,7 +255,10 @@ mod tests {
     fn render_all_labels_pdf417_captions() {
         let codes = crate::encode::encode_multi(
             &vec![b'a'; 4000],
-            &EncodeOptions::Pdf417 { ec: Pdf417Ec(2) },
+            &EncodeOptions::Pdf417 {
+                ec: Pdf417Ec(2),
+                columns: None,
+            },
             None,
             None,
         )

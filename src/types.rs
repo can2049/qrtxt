@@ -202,6 +202,9 @@ pub enum EncodeOptions {
     Pdf417 {
         /// Requested error-correction level.
         ec: Pdf417Ec,
+        /// Forced data-column count (`1`-`30`), or `None` to let the encoder pick
+        /// a balanced shape. Fewer columns make a narrower, taller symbol.
+        columns: Option<u32>,
     },
 }
 
@@ -349,7 +352,11 @@ mod tests {
         assert_eq!(EncodeOptions::Qr { ec: Ec::M }.format(), Format::Qr);
         assert_eq!(EncodeOptions::DataMatrix.format(), Format::DataMatrix);
         assert_eq!(
-            EncodeOptions::Pdf417 { ec: Pdf417Ec(4) }.format(),
+            EncodeOptions::Pdf417 {
+                ec: Pdf417Ec(4),
+                columns: None,
+            }
+            .format(),
             Format::Pdf417
         );
     }

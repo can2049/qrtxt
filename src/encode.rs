@@ -227,14 +227,16 @@ fn data_matrix_symbol(data: &[u8]) -> Result<Symbol, datamatrix::data::DataEncod
 /// Unlike QR and Data Matrix, the PDF417 encoder takes *text*, not bytes, so the
 /// payload is mapped through Latin-1 when it is not valid UTF-8 and declared as
 /// UTF-8 when it is non-ASCII text (see [`pdf417_symbol`]); both paths round-trip
-/// the original bytes. The error-correction level is a number from 0 to 8.
+/// the original bytes. The error-correction level is a number from 0 to 8, and
+/// `columns` optionally pins the data-column count to shape the symbol.
 struct Pdf417Codec {
     ec: Pdf417Ec,
+    columns: Option<u32>,
 }
 
 impl Codec for Pdf417Codec {
     fn encode(&self, data: &[u8]) -> Result<Symbol, AppError> {
-        pdf417_symbol(data, self.ec).map_err(|()| {
+        pdf417_symbol(data, self.ec, self.columns).map_err(|()| {
             let max = max_prefix_fitting(self, data);
             AppError::Input(format!(
                 "input too long: {} bytes (maximum {} bytes in a PDF417 symbol at error-correction level {})",
@@ -246,13 +248,19 @@ impl Codec for Pdf417Codec {
     }
 
     fn fits(&self, data: &[u8]) -> bool {
-        pdf417_symbol(data, self.ec).is_ok()
+        pdf417_symbol(data, self.ec, self.columns).is_ok()
     }
 
     fn capacity(&self) -> usize {
         PDF417_MAX_BYTES
     }
 }
+
+/// PDF417's row bounds (ISO/IEC 15438): at least 3 rows, at most 90. Applied when
+/// `--columns` pins the column count, so the symbol grows downward instead of
+/// being rejected once it no longer fits a narrow row.
+const PDF417_MIN_ROWS: u32 = 3;
+const PDF417_MAX_ROWS: u32 = 90;
 
 /// Encode `data` into a single PDF417 symbol as a neutral [`Symbol`].
 ///
@@ -261,9 +269,11 @@ impl Codec for Pdf417Codec {
 /// `U+0000..U+00FF`) and encoded in the default ISO-8859-1 charset, which returns
 /// the exact bytes on decode. Valid UTF-8 text outside ASCII is instead declared
 /// with a UTF-8 ECI, so scanners do not fall back to a legacy charset — the same
-/// reasoning as the QR encoder. Fails only for an empty payload or one too large
-/// for a single symbol.
-fn pdf417_symbol(data: &[u8], ec: Pdf417Ec) -> Result<Symbol, ()> {
+/// reasoning as the QR encoder. `columns` pins the data-column count when set
+/// (the symbol is then `17 * columns + 69` modules wide and grows taller); `None`
+/// lets the encoder choose a balanced shape. Fails only for an empty payload or
+/// one too large for a single symbol.
+fn pdf417_symbol(data: &[u8], ec: Pdf417Ec, columns: Option<u32>) -> Result<Symbol, ()> {
     let (text, utf8_eci): (std::borrow::Cow<'_, str>, bool) = match std::str::from_utf8(data) {
         Ok(text) if !text.is_ascii() => (std::borrow::Cow::Borrowed(text), true),
         Ok(text) => (std::borrow::Cow::Borrowed(text), false),
@@ -278,6 +288,9 @@ fn pdf417_symbol(data: &[u8], ec: Pdf417Ec) -> Result<Symbol, ()> {
     let mut encoder = PDF417::new();
     if utf8_eci {
         encoder.setEncoding(Some(CharacterSet::UTF8));
+    }
+    if let Some(columns) = columns {
+        encoder.setDimensions(columns, columns, PDF417_MAX_ROWS, PDF417_MIN_ROWS);
     }
     encoder
         .generateBarcodeLogicWithAutoECI(&text, u32::from(ec.get()), utf8_eci)
@@ -334,8 +347,11 @@ pub fn encode_multi(
             &qr
         }
         EncodeOptions::DataMatrix => &datamatrix,
-        EncodeOptions::Pdf417 { ec } => {
-            pdf417 = Pdf417Codec { ec: *ec };
+        EncodeOptions::Pdf417 { ec, columns } => {
+            pdf417 = Pdf417Codec {
+                ec: *ec,
+                columns: *columns,
+            };
             &pdf417
         }
     };
@@ -573,7 +589,18 @@ mod tests {
 
     /// PDF417 options at error-correction level `ec`, for the tests.
     fn pdf417(ec: u8) -> EncodeOptions {
-        EncodeOptions::Pdf417 { ec: Pdf417Ec(ec) }
+        EncodeOptions::Pdf417 {
+            ec: Pdf417Ec(ec),
+            columns: None,
+        }
+    }
+
+    /// A PDF417 codec with an optional forced column count, for the tests.
+    fn pdf417_codec(ec: u8, columns: Option<u32>) -> Pdf417Codec {
+        Pdf417Codec {
+            ec: Pdf417Ec(ec),
+            columns,
+        }
     }
 
     #[test]
@@ -585,6 +612,47 @@ mod tests {
             symbols[0].width(),
             symbols[0].height(),
             "PDF417 is not square"
+        );
+    }
+
+    #[test]
+    fn pdf417_columns_pin_the_symbol_width() {
+        // A symbol is `17 * columns + 69` modules wide; fewer columns is narrower
+        // and taller, more columns wider and shorter.
+        for columns in [1u32, 2, 5, 12] {
+            let symbol = pdf417_codec(2, Some(columns))
+                .encode(b"a payload that spans several columns")
+                .unwrap();
+            assert_eq!(
+                symbol.width(),
+                17 * columns as usize + 69,
+                "columns={columns}"
+            );
+        }
+    }
+
+    #[test]
+    fn pdf417_fewer_columns_make_a_taller_symbol() {
+        let data = b"a payload that spans several columns";
+        let wide = pdf417_codec(2, Some(12)).encode(data).unwrap();
+        let narrow = pdf417_codec(2, Some(2)).encode(data).unwrap();
+        assert!(
+            narrow.height() > wide.height(),
+            "narrow {} vs wide {}",
+            narrow.height(),
+            wide.height()
+        );
+    }
+
+    #[test]
+    fn pdf417_columns_too_few_for_the_payload_fail() {
+        // A single column holds at most 90 codewords, so a payload that would fit
+        // the default shape no longer fits and is reported as an input error.
+        let data = vec![b'a'; 1000];
+        assert!(pdf417_codec(2, None).fits(&data), "fits the default shape");
+        assert!(
+            !pdf417_codec(2, Some(1)).fits(&data),
+            "one column is too narrow"
         );
     }
 
@@ -613,7 +681,7 @@ mod tests {
     #[test]
     fn pdf417_split_covers_the_payload() {
         let data: Vec<u8> = (0..4000u32).map(|i| b'a' + (i % 26) as u8).collect();
-        let chunks = split_chunks_with(&Pdf417Codec { ec: Pdf417Ec(2) }, &data, None, None);
+        let chunks = split_chunks_with(&pdf417_codec(2, None), &data, None, None);
         assert!(chunks.len() > 1, "expected a split");
         assert_eq!(chunks.concat(), data);
     }
@@ -623,7 +691,7 @@ mod tests {
         // High bytes force byte compaction, the least dense mode, so the ceiling
         // sits well below the numeric bound.
         let huge = vec![0xffu8; 4000];
-        let Err(AppError::Input(message)) = Pdf417Codec { ec: Pdf417Ec(2) }.encode(&huge) else {
+        let Err(AppError::Input(message)) = pdf417_codec(2, None).encode(&huge) else {
             panic!("expected an input error");
         };
         assert!(message.contains("PDF417"), "{message}");
@@ -634,8 +702,8 @@ mod tests {
     #[test]
     fn pdf417_higher_levels_hold_less_data() {
         let data = vec![b'a'; 1500];
-        assert!(Pdf417Codec { ec: Pdf417Ec(0) }.fits(&data), "level 0");
-        assert!(!Pdf417Codec { ec: Pdf417Ec(8) }.fits(&data), "level 8");
+        assert!(pdf417_codec(0, None).fits(&data), "level 0");
+        assert!(!pdf417_codec(8, None).fits(&data), "level 8");
     }
 
     #[test]

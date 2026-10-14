@@ -287,6 +287,19 @@ struct Pdf417Args {
         help_heading = "Encoding"
     )]
     error: Pdf417Ec,
+
+    /// Force the number of data columns (1-30), shaping the symbol.
+    ///
+    /// PDF417 stacks its data across a fixed number of columns; fewer columns make
+    /// a narrower, taller symbol and more columns a wider, shorter one. Left unset,
+    /// the encoder picks a balanced shape. The value must be from 1 to 30.
+    #[arg(
+        long = "columns",
+        value_name = "N",
+        value_parser = clap::value_parser!(u32).range(1..=30),
+        help_heading = "Encoding"
+    )]
+    columns: Option<u32>,
 }
 
 impl Cli {
@@ -303,9 +316,13 @@ impl Cli {
                 .common
                 .to_config(mode, EncodeOptions::Qr { ec: args.error }),
             Command::Datamatrix(args) => args.common.to_config(mode, EncodeOptions::DataMatrix),
-            Command::Pdf417(args) => args
-                .common
-                .to_config(mode, EncodeOptions::Pdf417 { ec: args.error }),
+            Command::Pdf417(args) => args.common.to_config(
+                mode,
+                EncodeOptions::Pdf417 {
+                    ec: args.error,
+                    columns: args.columns,
+                },
+            ),
         }
     }
 
@@ -627,11 +644,17 @@ mod tests {
     fn pdf417_subcommand_selects_pdf417() {
         assert_eq!(
             config(&["pdf417", "x"]).encode,
-            EncodeOptions::Pdf417 { ec: Pdf417Ec(2) }
+            EncodeOptions::Pdf417 {
+                ec: Pdf417Ec(2),
+                columns: None,
+            }
         );
         assert_eq!(
             config(&["pdf", "x"]).encode,
-            EncodeOptions::Pdf417 { ec: Pdf417Ec(2) }
+            EncodeOptions::Pdf417 {
+                ec: Pdf417Ec(2),
+                columns: None,
+            }
         );
         assert_eq!(config(&["pdf417", "x"]).encode.format(), Format::Pdf417);
     }
@@ -643,7 +666,8 @@ mod tests {
             assert_eq!(
                 cfg.encode,
                 EncodeOptions::Pdf417 {
-                    ec: Pdf417Ec(level)
+                    ec: Pdf417Ec(level),
+                    columns: None,
                 }
             );
         }
@@ -653,7 +677,10 @@ mod tests {
     fn pdf417_error_correction_defaults_to_two() {
         assert_eq!(
             config(&["pdf417", "x"]).encode,
-            EncodeOptions::Pdf417 { ec: Pdf417Ec(2) }
+            EncodeOptions::Pdf417 {
+                ec: Pdf417Ec(2),
+                columns: None,
+            }
         );
     }
 
@@ -665,6 +692,48 @@ mod tests {
                 "level {level:?} should be rejected"
             );
         }
+    }
+
+    #[test]
+    fn pdf417_columns_flow_into_the_config() {
+        assert_eq!(
+            config(&["pdf417", "--columns", "1", "x"]).encode,
+            EncodeOptions::Pdf417 {
+                ec: Pdf417Ec(2),
+                columns: Some(1),
+            }
+        );
+        assert_eq!(
+            config(&["pdf417", "--columns", "30", "x"]).encode,
+            EncodeOptions::Pdf417 {
+                ec: Pdf417Ec(2),
+                columns: Some(30),
+            }
+        );
+        // Unset means the encoder picks the shape.
+        assert_eq!(
+            config(&["pdf417", "x"]).encode,
+            EncodeOptions::Pdf417 {
+                ec: Pdf417Ec(2),
+                columns: None,
+            }
+        );
+    }
+
+    #[test]
+    fn pdf417_rejects_out_of_range_columns() {
+        for columns in ["0", "31", "sixty"] {
+            assert!(
+                Cli::try_parse_from(["qrtxt", "pdf417", "--columns", columns, "x"]).is_err(),
+                "columns {columns:?} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn qr_and_datamatrix_reject_the_pdf417_columns_option() {
+        assert!(Cli::try_parse_from(["qrtxt", "qr", "--columns", "5", "x"]).is_err());
+        assert!(Cli::try_parse_from(["qrtxt", "datamatrix", "--columns", "5", "x"]).is_err());
     }
 
     #[test]

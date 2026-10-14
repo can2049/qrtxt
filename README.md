@@ -113,6 +113,7 @@ Payload:
 Encoding:
   -e, --error-correction <LEVEL>  (qr) Error-correction level: L (about 7% recoverable), M (15%), Q (25%), or H (30%) [default: L]
                                   (pdf417) Error-correction level: 0 (least redundancy) to 8 (most) [default: 2]
+      --columns <N>               (pdf417) Force the data-column count (1-30); fewer columns make a narrower, taller symbol
   -m, --max-bytes <BYTES>         Cap the payload of each symbol at BYTES bytes; implies splitting (default: the symbol's own limit)
   -c, --chunk <COUNT>             Split the payload across at least COUNT symbols; advisory (default: no minimum)
 
@@ -155,6 +156,12 @@ qrtxt pdf417 "https://example.com"
 
 # a higher PDF417 error-correction level (0-8)
 qrtxt pdf417 --error-correction 6 "important payload"
+
+# a narrower, taller PDF417 (fits a narrow terminal)
+qrtxt pdf417 --columns 1 "https://example.com"
+
+# the same, packed into half the cells
+qrtxt pdf417 --columns 1 --mode text --glyphs braille "https://example.com"
 
 # a crisp black-and-white bitmap (needs a Kitty-protocol terminal)
 qrtxt qr --mode kitty "https://example.com"
@@ -213,6 +220,14 @@ UTF-8 ECI, exactly as for QR; many scanners handle that inconsistently, so prefe
 printable ASCII where you can. Any payload a symbol cannot represent as UTF-8
 text — for instance raw binary — is encoded through a Latin-1 mapping that
 round-trips the original bytes.
+
+A PDF417 symbol is a stack of rows, so its shape is a width/height trade-off:
+by default the encoder picks a balanced one, which tends to be wide and short.
+Pass `--columns N` (1–30) to force the data-column count — the symbol is
+`17 × N + 69` modules wide and grows taller as `N` falls. `--columns 1` gives the
+narrowest, tallest code; larger values give wider, shorter ones. For terminal
+width, `--mode text --glyphs quadrant` (or `braille`) also packs two modules per
+cell and roughly halves the printed width.
 
 ## Rendering modes
 

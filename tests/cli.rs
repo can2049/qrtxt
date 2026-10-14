@@ -352,6 +352,36 @@ fn pdf417_rejects_out_of_range_or_letter_error_correction() {
 }
 
 #[test]
+fn pdf417_columns_reshape_the_symbol() {
+    // The colour escapes wrap every line identically, so comparing raw line
+    // lengths still orders the shapes correctly.
+    let max_width = |args: &[&str]| {
+        stdout(args)
+            .lines()
+            .map(|line| line.chars().count())
+            .max()
+            .unwrap_or(0)
+    };
+    let payload = "a payload that spans several columns";
+    let default = max_width(&["pdf417", "--mode", "text", payload]);
+    let narrow = max_width(&["pdf417", "--mode", "text", "--columns", "1", payload]);
+    let wide = max_width(&["pdf417", "--mode", "text", "--columns", "12", payload]);
+    assert!(narrow < default, "narrow={narrow} default={default}");
+    assert!(wide > default, "wide={wide} default={default}");
+}
+
+#[test]
+fn pdf417_columns_reject_out_of_range_or_bad_values() {
+    for columns in ["0", "31", "sixty"] {
+        qrtxt()
+            .args(["pdf417", "--columns", columns, "hello"])
+            .assert()
+            .failure()
+            .code(2);
+    }
+}
+
+#[test]
 fn removed_format_flag_is_rejected() {
     // The flat `--format` selector is gone; the subcommand chooses the format.
     qrtxt()
