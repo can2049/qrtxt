@@ -260,6 +260,9 @@ impl Codec for Pdf417Codec {
 const PDF417_MIN_ROWS: u32 = 3;
 const PDF417_MAX_ROWS: u32 = 90;
 
+/// PDF417's column bound (ISO/IEC 15438): at most 30 data columns.
+const PDF417_MAX_COLUMNS: u32 = 30;
+
 /// The largest row count safe for `columns` columns at error level `ec`.
 ///
 /// A PDF417 symbol carries its data-codeword count in a single codeword, so a
@@ -275,6 +278,16 @@ fn pdf417_max_rows(columns: u32, ec: Pdf417Ec) -> u32 {
     // level 0 and 512 at level 8 (ISO/IEC 15438).
     let ec_codewords = 1u32 << (u32::from(ec.get()) + 1);
     ((928 + ec_codewords) / columns).clamp(PDF417_MIN_ROWS, PDF417_MAX_ROWS)
+}
+
+/// Clamp a requested column count into PDF417's `1..=30` range.
+///
+/// The command line already restricts `--columns` to this range, but the field is
+/// public: `rxing` divides by the column count (so `0` panics) and builds
+/// row-indicator codewords that overflow for a symbol much wider than the
+/// standard allows, so any caller is clamped to avoid reaching those panics.
+fn pdf417_columns(columns: u32) -> u32 {
+    columns.clamp(1, PDF417_MAX_COLUMNS)
 }
 
 /// Encode `data` into a single PDF417 symbol as a neutral [`Symbol`].
@@ -305,6 +318,7 @@ fn pdf417_symbol(data: &[u8], ec: Pdf417Ec, columns: Option<u32>) -> Result<Symb
         encoder.setEncoding(Some(CharacterSet::UTF8));
     }
     if let Some(columns) = columns {
+        let columns = pdf417_columns(columns);
         encoder.setDimensions(
             columns,
             columns,
@@ -323,9 +337,11 @@ fn pdf417_symbol(data: &[u8], ec: Pdf417Ec, columns: Option<u32>) -> Result<Symb
 ///
 /// The matrix is row-major with `1` marking a bar, but the crate stores it
 /// bottom-up, so the rows are reversed to hand the renderers an upright symbol.
+/// The width is the longest row, so a shorter row (which we do not expect) can
+/// never index out of bounds.
 fn matrix_to_symbol(matrix: &[Vec<u8>]) -> Symbol {
     let height = matrix.len();
-    let width = matrix.first().map_or(0, Vec::len);
+    let width = matrix.iter().map(Vec::len).max().unwrap_or(0);
     let mut dark = vec![false; width * height];
     for (y, row) in matrix.iter().rev().enumerate() {
         for (x, &value) in row.iter().enumerate() {
@@ -674,6 +690,67 @@ mod tests {
             !pdf417_codec(2, Some(1)).fits(&data),
             "one column is too narrow"
         );
+    }
+
+    #[test]
+    fn pdf417_out_of_range_columns_are_clamped_not_panicking() {
+        // `columns` is a public parameter. rxing divides by it (0 → divide-by-zero
+        // panic) and builds row-indicator codewords that overflow its table for a
+        // symbol far wider than the standard (1000 → out-of-bounds panic). Every
+        // value must clamp into 1..=30 instead of panicking.
+        for (columns, expected) in [
+            (0u32, 1u32),
+            (1, 1),
+            (30, 30),
+            (31, 30),
+            (1000, 30),
+            (u32::MAX, 30),
+        ] {
+            let symbol = pdf417_codec(2, Some(columns))
+                .encode(b"hello")
+                .unwrap_or_else(|_| panic!("columns={columns} should encode"));
+            assert_eq!(
+                symbol.width(),
+                17 * expected as usize + 69,
+                "columns={columns} should clamp to {expected}"
+            );
+        }
+        assert_eq!(pdf417_columns(0), 1);
+        assert_eq!(pdf417_columns(30), 30);
+        assert_eq!(pdf417_columns(31), 30);
+        assert_eq!(pdf417_columns(u32::MAX), 30);
+    }
+
+    #[test]
+    fn pdf417_extreme_columns_do_not_panic_through_the_split_path() {
+        for columns in [0u32, 31, 1000, u32::MAX] {
+            let data = vec![b'a'; 4000];
+            let codes = encode_multi(
+                &data,
+                &EncodeOptions::Pdf417 {
+                    ec: Pdf417Ec(2),
+                    columns: Some(columns),
+                },
+                None,
+                None,
+            )
+            .expect("splits without panicking");
+            assert!(!codes.is_empty(), "columns={columns}");
+            // The clamp caps the width at 30 columns.
+            assert!(codes.iter().all(|code| code.width() <= 17 * 30 + 69));
+        }
+    }
+
+    #[test]
+    fn pdf417_out_of_range_error_level_does_not_panic() {
+        // The CLI rejects levels above 8, but the level is validated only at the
+        // boundary; an out-of-range level must fail cleanly rather than panic in
+        // rxing's error-correction coefficient table.
+        for level in [9u8, 12, 255] {
+            let codec = pdf417_codec(level, None);
+            assert!(!codec.fits(b"hello"), "level={level}");
+            assert!(matches!(codec.encode(b"hello"), Err(AppError::Input(_))));
+        }
     }
 
     #[test]

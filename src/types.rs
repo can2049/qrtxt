@@ -202,8 +202,10 @@ pub enum EncodeOptions {
     Pdf417 {
         /// Requested error-correction level.
         ec: Pdf417Ec,
-        /// Forced data-column count (`1`-`30`), or `None` to let the encoder pick
-        /// a balanced shape. Fewer columns make a narrower, taller symbol.
+        /// Forced data-column count, or `None` to let the encoder pick a balanced
+        /// shape. Fewer columns make a narrower, taller symbol. Values outside
+        /// PDF417's `1..=30` range are clamped into it, so the command line's
+        /// `--columns` and direct callers both stay safe.
         columns: Option<u32>,
     },
 }
