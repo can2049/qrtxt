@@ -9,9 +9,11 @@ use qrcode::bits::Bits;
 use qrcode::optimize::{Parser, Segment};
 use qrcode::types::{Mode, QrError};
 use qrcode::{Color, EcLevel, QrCode, Version};
+use rxing::common::CharacterSet;
+use rxing::pdf417::encoder::PDF417;
 
 use crate::error::AppError;
-use crate::types::{Ec, EncodeOptions, Symbol};
+use crate::types::{Ec, EncodeOptions, Pdf417Ec, Symbol};
 
 /// ECI designator for UTF-8 (ISO/IEC 18004 assignment 26).
 const UTF8_ECI: u32 = 26;
@@ -129,6 +131,15 @@ const QR_MAX_BYTES: usize = 7089;
 /// numeric): the bound for the split search (FR-2.6).
 const DATAMATRIX_MAX_BYTES: usize = 3116;
 
+/// Upper bound on the bytes a single PDF417 symbol can hold: the bound for the
+/// split search.
+///
+/// PDF417's densest mode is numeric compaction (about 2.9 bytes per data
+/// codeword), and the most data codewords any symbol carries is 925 (level 0),
+/// so no payload can exceed roughly 2710 bytes. This rounds that up: being an
+/// over-estimate only costs a few extra probes in [`max_prefix_fitting`].
+const PDF417_MAX_BYTES: usize = 2800;
+
 /// QR codec: the `qrcode` crate at the exact error level (`qrcode` never boosts
 /// it, matching qrpipe's `boost_error=false`).
 struct QrCodec {
@@ -211,6 +222,135 @@ fn data_matrix_symbol(data: &[u8]) -> Result<Symbol, datamatrix::data::DataEncod
     Ok(Symbol::new(width, height, dark))
 }
 
+/// PDF417 codec: the `rxing` crate's low-level encoder.
+///
+/// Unlike QR and Data Matrix, the PDF417 encoder takes *text*, not bytes, so the
+/// payload is mapped through Latin-1 when it is not valid UTF-8 and declared as
+/// UTF-8 when it is non-ASCII text (see [`pdf417_symbol`]); both paths round-trip
+/// the original bytes. The error-correction level is a number from 0 to 8, and
+/// `columns` optionally pins the data-column count to shape the symbol.
+struct Pdf417Codec {
+    ec: Pdf417Ec,
+    columns: Option<u32>,
+}
+
+impl Codec for Pdf417Codec {
+    fn encode(&self, data: &[u8]) -> Result<Symbol, AppError> {
+        pdf417_symbol(data, self.ec, self.columns).map_err(|()| {
+            let max = max_prefix_fitting(self, data);
+            AppError::Input(format!(
+                "input too long: {} bytes (maximum {} bytes in a PDF417 symbol at error-correction level {})",
+                data.len(),
+                max,
+                self.ec.get()
+            ))
+        })
+    }
+
+    fn fits(&self, data: &[u8]) -> bool {
+        pdf417_symbol(data, self.ec, self.columns).is_ok()
+    }
+
+    fn capacity(&self) -> usize {
+        PDF417_MAX_BYTES
+    }
+}
+
+/// PDF417's row bounds (ISO/IEC 15438): at least 3 rows, at most 90.
+const PDF417_MIN_ROWS: u32 = 3;
+const PDF417_MAX_ROWS: u32 = 90;
+
+/// PDF417's column bound (ISO/IEC 15438): at most 30 data columns.
+const PDF417_MAX_COLUMNS: u32 = 30;
+
+/// The largest row count safe for `columns` columns at error level `ec`.
+///
+/// A PDF417 symbol carries its data-codeword count in a single codeword, so a
+/// symbol can address at most 928 data codewords. `rxing` derives the row count
+/// from the payload but guards only the *high-level* codeword count, so a large
+/// forced column count can make `columns * rows - ecCodewords` exceed 928 and it
+/// then indexes its 929-entry codeword table out of bounds — a panic, not an
+/// error. Bounding the rows to `(928 + ecCodewords) / columns` keeps the
+/// descriptor in range `(FR-2.6)`, so an oversized payload fails with a clean
+/// "cannot fit" error instead.
+fn pdf417_max_rows(columns: u32, ec: Pdf417Ec) -> u32 {
+    // Error-correction codewords double with each level: 2^(level + 1), so 2 at
+    // level 0 and 512 at level 8 (ISO/IEC 15438).
+    let ec_codewords = 1u32 << (u32::from(ec.get()) + 1);
+    ((928 + ec_codewords) / columns).clamp(PDF417_MIN_ROWS, PDF417_MAX_ROWS)
+}
+
+/// Clamp a requested column count into PDF417's `1..=30` range.
+///
+/// The command line already restricts `--columns` to this range, but the field is
+/// public: `rxing` divides by the column count (so `0` panics) and builds
+/// row-indicator codewords that overflow for a symbol much wider than the
+/// standard allows, so any caller is clamped to avoid reaching those panics.
+fn pdf417_columns(columns: u32) -> u32 {
+    columns.clamp(1, PDF417_MAX_COLUMNS)
+}
+
+/// Encode `data` into a single PDF417 symbol as a neutral [`Symbol`].
+///
+/// The `rxing` encoder accepts a string rather than raw bytes, so a payload that
+/// is not valid UTF-8 is mapped through Latin-1 (byte value to code point
+/// `U+0000..U+00FF`) and encoded in the default ISO-8859-1 charset, which returns
+/// the exact bytes on decode. Valid UTF-8 text outside ASCII is instead declared
+/// with a UTF-8 ECI, so scanners do not fall back to a legacy charset — the same
+/// reasoning as the QR encoder. `columns` pins the data-column count when set
+/// (the symbol is then `17 * columns + 69` modules wide and grows taller); `None`
+/// lets the encoder choose a balanced shape. Fails only for an empty payload or
+/// one too large for a single symbol.
+fn pdf417_symbol(data: &[u8], ec: Pdf417Ec, columns: Option<u32>) -> Result<Symbol, ()> {
+    let (text, utf8_eci): (std::borrow::Cow<'_, str>, bool) = match std::str::from_utf8(data) {
+        Ok(text) if !text.is_ascii() => (std::borrow::Cow::Borrowed(text), true),
+        Ok(text) => (std::borrow::Cow::Borrowed(text), false),
+        Err(_) => (
+            data.iter()
+                .map(|&byte| byte as char)
+                .collect::<String>()
+                .into(),
+            false,
+        ),
+    };
+    let mut encoder = PDF417::new();
+    if utf8_eci {
+        encoder.setEncoding(Some(CharacterSet::UTF8));
+    }
+    if let Some(columns) = columns {
+        let columns = pdf417_columns(columns);
+        encoder.setDimensions(
+            columns,
+            columns,
+            pdf417_max_rows(columns, ec),
+            PDF417_MIN_ROWS,
+        );
+    }
+    encoder
+        .generateBarcodeLogicWithAutoECI(&text, u32::from(ec.get()), utf8_eci)
+        .map_err(|_| ())?;
+    let matrix = encoder.getBarcodeMatrix().as_ref().ok_or(())?.getMatrix();
+    Ok(matrix_to_symbol(&matrix))
+}
+
+/// Convert `rxing`'s PDF417 bit matrix into the neutral [`Symbol`] grid.
+///
+/// The matrix is row-major with `1` marking a bar, but the crate stores it
+/// bottom-up, so the rows are reversed to hand the renderers an upright symbol.
+/// The width is the longest row, so a shorter row (which we do not expect) can
+/// never index out of bounds.
+fn matrix_to_symbol(matrix: &[Vec<u8>]) -> Symbol {
+    let height = matrix.len();
+    let width = matrix.iter().map(Vec::len).max().unwrap_or(0);
+    let mut dark = vec![false; width * height];
+    for (y, row) in matrix.iter().rev().enumerate() {
+        for (x, &value) in row.iter().enumerate() {
+            dark[y * width + x] = value == 1;
+        }
+    }
+    Symbol::new(width, height, dark)
+}
+
 /// Encode `data` into an ordinary QR code at the exact error level.
 ///
 /// `qrcode` never boosts the error level, matching qrpipe's `boost_error=false`.
@@ -236,12 +376,20 @@ pub fn encode_multi(
 ) -> Result<Vec<Symbol>, AppError> {
     let qr;
     let datamatrix = DataMatrixCodec;
+    let pdf417;
     let codec: &dyn Codec = match encode {
         EncodeOptions::Qr { ec } => {
             qr = QrCodec { ec: *ec };
             &qr
         }
         EncodeOptions::DataMatrix => &datamatrix,
+        EncodeOptions::Pdf417 { ec, columns } => {
+            pdf417 = Pdf417Codec {
+                ec: *ec,
+                columns: *columns,
+            };
+            &pdf417
+        }
     };
     split_chunks_with(codec, data, max_bytes, min_chunks)
         .into_iter()
@@ -473,6 +621,376 @@ mod tests {
         };
         assert!(message.contains("Data Matrix"), "{message}");
         assert!(message.contains("4000"), "{message}");
+    }
+
+    /// PDF417 options at error-correction level `ec`, for the tests.
+    fn pdf417(ec: u8) -> EncodeOptions {
+        EncodeOptions::Pdf417 {
+            ec: Pdf417Ec(ec),
+            columns: None,
+        }
+    }
+
+    /// A PDF417 codec with an optional forced column count, for the tests.
+    fn pdf417_codec(ec: u8, columns: Option<u32>) -> Pdf417Codec {
+        Pdf417Codec {
+            ec: Pdf417Ec(ec),
+            columns,
+        }
+    }
+
+    #[test]
+    fn pdf417_encodes_a_rectangular_symbol() {
+        let symbols = encode_multi(b"hello", &pdf417(2), None, None).unwrap();
+        assert_eq!(symbols.len(), 1);
+        assert!(symbols[0].width() > 0 && symbols[0].height() > 0);
+        assert_ne!(
+            symbols[0].width(),
+            symbols[0].height(),
+            "PDF417 is not square"
+        );
+    }
+
+    #[test]
+    fn pdf417_columns_pin_the_symbol_width() {
+        // A symbol is `17 * columns + 69` modules wide; fewer columns is narrower
+        // and taller, more columns wider and shorter.
+        for columns in [1u32, 2, 5, 12] {
+            let symbol = pdf417_codec(2, Some(columns))
+                .encode(b"a payload that spans several columns")
+                .unwrap();
+            assert_eq!(
+                symbol.width(),
+                17 * columns as usize + 69,
+                "columns={columns}"
+            );
+        }
+    }
+
+    #[test]
+    fn pdf417_fewer_columns_make_a_taller_symbol() {
+        let data = b"a payload that spans several columns";
+        let wide = pdf417_codec(2, Some(12)).encode(data).unwrap();
+        let narrow = pdf417_codec(2, Some(2)).encode(data).unwrap();
+        assert!(
+            narrow.height() > wide.height(),
+            "narrow {} vs wide {}",
+            narrow.height(),
+            wide.height()
+        );
+    }
+
+    #[test]
+    fn pdf417_columns_too_few_for_the_payload_fail() {
+        // A single column holds at most 90 codewords, so a payload that would fit
+        // the default shape no longer fits and is reported as an input error.
+        let data = vec![b'a'; 1000];
+        assert!(pdf417_codec(2, None).fits(&data), "fits the default shape");
+        assert!(
+            !pdf417_codec(2, Some(1)).fits(&data),
+            "one column is too narrow"
+        );
+    }
+
+    #[test]
+    fn pdf417_out_of_range_columns_are_clamped_not_panicking() {
+        // `columns` is a public parameter. rxing divides by it (0 → divide-by-zero
+        // panic) and builds row-indicator codewords that overflow its table for a
+        // symbol far wider than the standard (1000 → out-of-bounds panic). Every
+        // value must clamp into 1..=30 instead of panicking.
+        for (columns, expected) in [
+            (0u32, 1u32),
+            (1, 1),
+            (30, 30),
+            (31, 30),
+            (1000, 30),
+            (u32::MAX, 30),
+        ] {
+            let symbol = pdf417_codec(2, Some(columns))
+                .encode(b"hello")
+                .unwrap_or_else(|_| panic!("columns={columns} should encode"));
+            assert_eq!(
+                symbol.width(),
+                17 * expected as usize + 69,
+                "columns={columns} should clamp to {expected}"
+            );
+        }
+        assert_eq!(pdf417_columns(0), 1);
+        assert_eq!(pdf417_columns(30), 30);
+        assert_eq!(pdf417_columns(31), 30);
+        assert_eq!(pdf417_columns(u32::MAX), 30);
+    }
+
+    #[test]
+    fn pdf417_extreme_columns_do_not_panic_through_the_split_path() {
+        for columns in [0u32, 31, 1000, u32::MAX] {
+            let data = vec![b'a'; 4000];
+            let codes = encode_multi(
+                &data,
+                &EncodeOptions::Pdf417 {
+                    ec: Pdf417Ec(2),
+                    columns: Some(columns),
+                },
+                None,
+                None,
+            )
+            .expect("splits without panicking");
+            assert!(!codes.is_empty(), "columns={columns}");
+            // The clamp caps the width at 30 columns.
+            assert!(codes.iter().all(|code| code.width() <= 17 * 30 + 69));
+        }
+    }
+
+    #[test]
+    fn pdf417_out_of_range_error_level_does_not_panic() {
+        // The CLI rejects levels above 8, but the level is validated only at the
+        // boundary; an out-of-range level must fail cleanly rather than panic in
+        // rxing's error-correction coefficient table.
+        for level in [9u8, 12, 255] {
+            let codec = pdf417_codec(level, None);
+            assert!(!codec.fits(b"hello"), "level={level}");
+            assert!(matches!(codec.encode(b"hello"), Err(AppError::Input(_))));
+        }
+    }
+
+    #[test]
+    fn pdf417_max_rows_keeps_columns_times_rows_within_the_codeword_table() {
+        // The symbol's data-codeword count is `columns * rows - ecCodewords`; the
+        // symbol length descriptor it must fit is bounded by `928 + ecCodewords`
+        // total codewords, or rxing indexes its 929-entry table out of bounds.
+        for level in 0..=8u8 {
+            let ec_codewords = 1u32 << (u32::from(level) + 1);
+            for columns in 1..=30u32 {
+                let rows = pdf417_max_rows(columns, Pdf417Ec(level));
+                assert!(
+                    (PDF417_MIN_ROWS..=PDF417_MAX_ROWS).contains(&rows),
+                    "level={level} columns={columns}: rows {rows} out of range"
+                );
+                assert!(
+                    columns * rows <= 928 + ec_codewords,
+                    "level={level} columns={columns}: {} codewords overflow",
+                    columns * rows
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn pdf417_forced_columns_do_not_panic_on_a_payload_that_overran_the_table() {
+        // Regression: 1830 bytes at 20 columns made rxing index its codeword table
+        // out of bounds (index 932 into a 929-entry table) and panic. It must now
+        // be rejected cleanly, at the single-symbol level and through the split
+        // search (`encode`) that probes this size.
+        let data = vec![b'a'; 1830];
+        let codec = pdf417_codec(2, Some(20));
+        assert!(!codec.fits(&data), "20 columns cannot hold this payload");
+        assert!(matches!(codec.encode(&data), Err(AppError::Input(_))));
+
+        let codes = encode_multi(
+            &data,
+            &EncodeOptions::Pdf417 {
+                ec: Pdf417Ec(2),
+                columns: Some(20),
+            },
+            None,
+            None,
+        )
+        .expect("splits instead of panicking");
+        assert!(
+            codes.iter().all(|code| code.width() == 17 * 20 + 69),
+            "every code must use the forced columns"
+        );
+    }
+
+    #[test]
+    fn pdf417_forced_columns_never_panic_across_shapes() {
+        // Every column count must encode or fail cleanly across a range of sizes;
+        // a panic would fail the test.
+        for columns in 1..=30u32 {
+            for len in [400usize, 900, 1830, 2600] {
+                let data = vec![b'a'; len];
+                if let Ok(symbol) = pdf417_codec(2, Some(columns)).encode(&data) {
+                    assert_eq!(
+                        symbol.width(),
+                        17 * columns as usize + 69,
+                        "columns={columns} len={len}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Error-correction levels the sweep drives the encoder with: every level.
+    const PDF417_LEVELS: [u8; 9] = [0, 1, 2, 3, 4, 5, 6, 7, 8];
+
+    /// Column counts the sweep drives the encoder with: the automatic shape, the
+    /// two extremes, and a spread between them.
+    const PDF417_COLUMNS: [Option<u32>; 7] = [
+        None,
+        Some(1),
+        Some(2),
+        Some(5),
+        Some(12),
+        Some(20),
+        Some(30),
+    ];
+
+    /// Payloads spanning the ordinary and the awkward: empty, one byte, ASCII,
+    /// raw binary (Latin-1), non-ASCII text (UTF-8 ECI), and sizes around the
+    /// single-symbol capacity.
+    fn pdf417_payloads() -> Vec<Vec<u8>> {
+        let mut payloads = vec![
+            Vec::new(),
+            b"a".to_vec(),
+            b"hello".to_vec(),
+            b"https://example.com/abc".to_vec(),
+            vec![0xff, 0x00, 0x80, 0x41, 0x42],
+            "你好，世界".as_bytes().to_vec(),
+            "mixed 混合 😀".as_bytes().to_vec(),
+        ];
+        for len in [500usize, 1830, 3000] {
+            payloads.push(vec![b'a'; len]);
+        }
+        payloads
+    }
+
+    #[test]
+    fn rxing_pdf417_matrix_geometry_matches_our_assumptions() {
+        // We build our `Symbol` straight from rxing's `getMatrix`, so pin the two
+        // properties we rely on: a uniform row width of `17 * columns + 69` and at
+        // least the minimum number of rows. A change here would silently corrupt
+        // every PDF417 we print.
+        let columns = 5u32;
+        let mut encoder = PDF417::new();
+        encoder.setDimensions(columns, columns, PDF417_MAX_ROWS, PDF417_MIN_ROWS);
+        encoder.generateBarcodeLogic("hello", 2).expect("encodes");
+        let matrix = encoder
+            .getBarcodeMatrix()
+            .as_ref()
+            .expect("matrix")
+            .getMatrix();
+
+        assert!(matrix.len() >= PDF417_MIN_ROWS as usize, "too few rows");
+        let width = matrix[0].len();
+        assert_eq!(width, 17 * columns as usize + 69, "row width");
+        assert!(
+            matrix.iter().all(|row| row.len() == width),
+            "rows must have a uniform width"
+        );
+        assert!(
+            matrix.iter().flatten().all(|&module| module <= 1),
+            "modules are 0 or 1"
+        );
+    }
+
+    #[test]
+    fn pdf417_api_never_panics_across_levels_columns_and_payloads() {
+        // The full cross-product of error levels, column counts and payload shapes,
+        // including empty, binary and oversized inputs: every call to the
+        // rxing-backed encoder must return, and `fits` must agree with `encode`.
+        // This is the sweep that would have caught the codeword-overflow panic.
+        let payloads = pdf417_payloads();
+        for level in PDF417_LEVELS {
+            for columns in PDF417_COLUMNS {
+                let codec = Pdf417Codec {
+                    ec: Pdf417Ec(level),
+                    columns,
+                };
+                for data in &payloads {
+                    let fits = codec.fits(data);
+                    let encoded = codec.encode(data);
+                    assert_eq!(
+                        fits,
+                        encoded.is_ok(),
+                        "level={level} columns={columns:?} len={}",
+                        data.len()
+                    );
+                    if let Ok(symbol) = encoded {
+                        assert!(symbol.width() > 0 && symbol.height() > 0);
+                        if let Some(columns) = columns {
+                            assert_eq!(
+                                symbol.width(),
+                                17 * columns as usize + 69,
+                                "level={level} columns={columns} len={}",
+                                data.len()
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pdf417_split_never_panics_across_parameters() {
+        // The whole split path with the awkward knobs together — forced columns, a
+        // byte cap and a chunk floor — over sizes that overflowed the codeword
+        // table before the row bound was added.
+        for level in [0u8, 2, 8] {
+            for columns in [None, Some(1), Some(20), Some(30)] {
+                for len in [0usize, 1, 1830, 3000] {
+                    let data = vec![b'a'; len];
+                    let encode = EncodeOptions::Pdf417 {
+                        ec: Pdf417Ec(level),
+                        columns,
+                    };
+                    // May fail for an impossible shape; it must not panic.
+                    let _ = encode_multi(&data, &encode, None, None);
+                    let _ = encode_multi(&data, &encode, Some(250), None);
+                    let _ = encode_multi(&data, &encode, None, Some(5));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pdf417_encodes_non_ascii_text_and_raw_bytes() {
+        // Non-ASCII UTF-8 is declared with a UTF-8 ECI; non-UTF-8 bytes go through
+        // the Latin-1 mapping. Both must encode without error.
+        for data in [
+            "你好，世界".as_bytes(),
+            "参数 --file 文件".as_bytes(),
+            &[0xff, 0x00, 0x80, 0x41, 0x42],
+        ] {
+            assert!(
+                encode_multi(data, &pdf417(2), None, None).is_ok(),
+                "failed for {data:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn pdf417_splits_an_oversized_payload() {
+        let codes = encode_multi(&vec![b'a'; 4000], &pdf417(2), None, None).unwrap();
+        assert!(codes.len() > 1, "expected more than one symbol");
+    }
+
+    #[test]
+    fn pdf417_split_covers_the_payload() {
+        let data: Vec<u8> = (0..4000u32).map(|i| b'a' + (i % 26) as u8).collect();
+        let chunks = split_chunks_with(&pdf417_codec(2, None), &data, None, None);
+        assert!(chunks.len() > 1, "expected a split");
+        assert_eq!(chunks.concat(), data);
+    }
+
+    #[test]
+    fn pdf417_reports_the_ceiling_for_an_oversized_input() {
+        // High bytes force byte compaction, the least dense mode, so the ceiling
+        // sits well below the numeric bound.
+        let huge = vec![0xffu8; 4000];
+        let Err(AppError::Input(message)) = pdf417_codec(2, None).encode(&huge) else {
+            panic!("expected an input error");
+        };
+        assert!(message.contains("PDF417"), "{message}");
+        assert!(message.contains("4000"), "{message}");
+        assert!(message.contains("level 2"), "{message}");
+    }
+
+    #[test]
+    fn pdf417_higher_levels_hold_less_data() {
+        let data = vec![b'a'; 1500];
+        assert!(pdf417_codec(0, None).fits(&data), "level 0");
+        assert!(!pdf417_codec(8, None).fits(&data), "level 8");
     }
 
     #[test]

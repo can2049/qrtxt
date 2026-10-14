@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand};
 
 use crate::error::AppError;
-use crate::types::{Config, Ec, EncodeOptions, GlyphSet, InputSpec, Mode, RenderMode};
+use crate::types::{Config, Ec, EncodeOptions, GlyphSet, InputSpec, Mode, Pdf417Ec, RenderMode};
 
 mod help;
 mod parse;
@@ -24,22 +24,23 @@ mod probe;
 pub use help::{add_mode_hint, mode_support_hint};
 pub use parse::parse;
 
-/// Turn text into a terminal QR code or Data Matrix.
+/// Turn text into a terminal QR code, Data Matrix, or PDF417.
 #[derive(Debug, Parser)]
 #[command(
     name = "qrtxt",
     version,
-    about = "Turn text into a terminal QR code or Data Matrix",
-    long_about = "Turn text into a terminal QR code or Data Matrix.\n\n\
+    about = "Turn text into a terminal QR code, Data Matrix, or PDF417",
+    long_about = "Turn text into a terminal QR code, Data Matrix, or PDF417.\n\n\
 Reads a payload from a literal argument, a file, or standard input and prints it as one or \
-more symbols. The subcommand chooses the symbology: `qr` draws an ordinary QR code and \
-`datamatrix` draws a Data Matrix (ECC 200) symbol. By default the best rendering the terminal \
+more symbols. The subcommand chooses the symbology: `qr` draws an ordinary QR code, \
+`datamatrix` draws a Data Matrix (ECC 200) symbol, and `pdf417` draws a stacked PDF417 \
+symbol. By default the best rendering the terminal \
 offers is used: a crisp bitmap over the Kitty or Sixel graphics protocol where supported, \
 otherwise Unicode block characters, so a plain UTF-8 terminal always works. Use --mode to \
 force a specific renderer.\n\n\
 A payload too large for a single symbol is split automatically across several balanced \
-symbols, printed in order under a `QR Code i/N` (or `Data Matrix i/N`) caption. Use --max-bytes \
-to cap the bytes per symbol, or --chunk to require a minimum number of symbols.",
+symbols, printed in order under a `QR Code i/N` (or `Data Matrix i/N`, `PDF417 i/N`) caption. \
+Use --max-bytes to cap the bytes per symbol, or --chunk to require a minimum number of symbols.",
     after_help = "Source: https://github.com/can2049/qrtxt"
 )]
 pub struct Cli {
@@ -65,6 +66,9 @@ enum Command {
     /// Encode a Data Matrix (ECC 200) symbol.
     #[command(visible_alias = "dm")]
     Datamatrix(DatamatrixArgs),
+    /// Encode a PDF417 symbol.
+    #[command(visible_alias = "pdf")]
+    Pdf417(Pdf417Args),
 }
 
 /// Options shared by every subcommand.
@@ -260,6 +264,48 @@ struct DatamatrixArgs {
     common: CommonArgs,
 }
 
+/// Options for the `pdf417` subcommand.
+///
+/// PDF417 numbers its error-correction levels from 0 to 8 (each step roughly
+/// doubles the correction codewords), so `--error-correction` takes a digit here
+/// rather than QR's letters.
+#[derive(Debug, Args)]
+struct Pdf417Args {
+    #[command(flatten)]
+    common: CommonArgs,
+
+    /// Error-correction level: 0 (least redundancy, most data) to 8 (most).
+    ///
+    /// Each step roughly doubles the number of correction codewords, so a higher
+    /// level recovers from more damage but holds less data. The level is never
+    /// raised automatically, and the value must be a single digit from 0 to 8.
+    #[arg(
+        short = 'e',
+        long = "error-correction",
+        value_name = "LEVEL",
+        default_value = "2",
+        help_heading = "Encoding"
+    )]
+    error: Pdf417Ec,
+
+    /// Force the number of data columns (1-30), shaping the symbol.
+    ///
+    /// PDF417 stacks its data across a fixed number of columns; fewer columns make
+    /// a narrower, taller symbol and more columns a wider, shorter one. Left unset,
+    /// the encoder picks a balanced shape. The value must be from 1 to 30.
+    ///
+    /// Also accepted as `-C` and `--cl`.
+    #[arg(
+        short = 'C',
+        long = "columns",
+        visible_alias = "cl",
+        value_name = "N",
+        value_parser = clap::value_parser!(u32).range(1..=30),
+        help_heading = "Encoding"
+    )]
+    columns: Option<u32>,
+}
+
 impl Cli {
     /// Convert parsed arguments into a neutral configuration for `mode`.
     ///
@@ -274,6 +320,13 @@ impl Cli {
                 .common
                 .to_config(mode, EncodeOptions::Qr { ec: args.error }),
             Command::Datamatrix(args) => args.common.to_config(mode, EncodeOptions::DataMatrix),
+            Command::Pdf417(args) => args.common.to_config(
+                mode,
+                EncodeOptions::Pdf417 {
+                    ec: args.error,
+                    columns: args.columns,
+                },
+            ),
         }
     }
 
@@ -282,6 +335,7 @@ impl Cli {
         match &self.command {
             Command::Qr(args) => args.common.mode(),
             Command::Datamatrix(args) => args.common.mode(),
+            Command::Pdf417(args) => args.common.mode(),
         }
     }
 }
@@ -354,7 +408,7 @@ fn map_write_error(error: std::io::Error) -> Result<(), AppError> {
         Ok(())
     } else {
         Err(AppError::Io {
-            context: "cannot write QR output",
+            context: "cannot write barcode output",
             source: error,
         })
     }
@@ -382,7 +436,9 @@ mod tests {
     fn qr_ec(cfg: &Config) -> Ec {
         match cfg.encode {
             EncodeOptions::Qr { ec } => ec,
-            EncodeOptions::DataMatrix => panic!("expected QR options"),
+            EncodeOptions::DataMatrix | EncodeOptions::Pdf417 { .. } => {
+                panic!("expected QR options")
+            }
         }
     }
 
@@ -586,5 +642,118 @@ mod tests {
     fn datamatrix_subcommand_rejects_error_correction() {
         // Data Matrix has no error-correction option; `-e` is a QR-only flag.
         assert!(Cli::try_parse_from(["qrtxt", "datamatrix", "-e", "H", "x"]).is_err());
+    }
+
+    #[test]
+    fn pdf417_subcommand_selects_pdf417() {
+        assert_eq!(
+            config(&["pdf417", "x"]).encode,
+            EncodeOptions::Pdf417 {
+                ec: Pdf417Ec(2),
+                columns: None,
+            }
+        );
+        assert_eq!(
+            config(&["pdf", "x"]).encode,
+            EncodeOptions::Pdf417 {
+                ec: Pdf417Ec(2),
+                columns: None,
+            }
+        );
+        assert_eq!(config(&["pdf417", "x"]).encode.format(), Format::Pdf417);
+    }
+
+    #[test]
+    fn pdf417_error_correction_parses_zero_through_eight() {
+        for level in 0..=8u8 {
+            let cfg = config(&["pdf417", "-e", &level.to_string(), "x"]);
+            assert_eq!(
+                cfg.encode,
+                EncodeOptions::Pdf417 {
+                    ec: Pdf417Ec(level),
+                    columns: None,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn pdf417_error_correction_defaults_to_two() {
+        assert_eq!(
+            config(&["pdf417", "x"]).encode,
+            EncodeOptions::Pdf417 {
+                ec: Pdf417Ec(2),
+                columns: None,
+            }
+        );
+    }
+
+    #[test]
+    fn pdf417_rejects_out_of_range_or_letter_levels() {
+        for level in ["9", "-1", "H", "L"] {
+            assert!(
+                Cli::try_parse_from(["qrtxt", "pdf417", "-e", level, "x"]).is_err(),
+                "level {level:?} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn pdf417_columns_flow_into_the_config() {
+        assert_eq!(
+            config(&["pdf417", "--columns", "1", "x"]).encode,
+            EncodeOptions::Pdf417 {
+                ec: Pdf417Ec(2),
+                columns: Some(1),
+            }
+        );
+        assert_eq!(
+            config(&["pdf417", "--columns", "30", "x"]).encode,
+            EncodeOptions::Pdf417 {
+                ec: Pdf417Ec(2),
+                columns: Some(30),
+            }
+        );
+        // Unset means the encoder picks the shape.
+        assert_eq!(
+            config(&["pdf417", "x"]).encode,
+            EncodeOptions::Pdf417 {
+                ec: Pdf417Ec(2),
+                columns: None,
+            }
+        );
+    }
+
+    #[test]
+    fn pdf417_columns_short_and_alias_forms_match_the_long_flag() {
+        let expected = EncodeOptions::Pdf417 {
+            ec: Pdf417Ec(2),
+            columns: Some(5),
+        };
+        assert_eq!(config(&["pdf417", "-C", "5", "x"]).encode, expected);
+        assert_eq!(config(&["pdf417", "--cl", "5", "x"]).encode, expected);
+        assert_eq!(config(&["pdf417", "--columns", "5", "x"]).encode, expected);
+    }
+
+    #[test]
+    fn pdf417_rejects_out_of_range_columns() {
+        for columns in ["0", "31", "sixty"] {
+            assert!(
+                Cli::try_parse_from(["qrtxt", "pdf417", "--columns", columns, "x"]).is_err(),
+                "columns {columns:?} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn qr_and_datamatrix_reject_the_pdf417_columns_option() {
+        assert!(Cli::try_parse_from(["qrtxt", "qr", "--columns", "5", "x"]).is_err());
+        assert!(Cli::try_parse_from(["qrtxt", "datamatrix", "--columns", "5", "x"]).is_err());
+    }
+
+    #[test]
+    fn qr_rejects_a_numeric_error_correction() {
+        // The error-correction domain is per-format: QR still takes letters.
+        assert!(Cli::try_parse_from(["qrtxt", "qr", "-e", "2", "x"]).is_err());
     }
 }

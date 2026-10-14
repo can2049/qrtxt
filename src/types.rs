@@ -38,6 +38,56 @@ impl FromStr for Ec {
     }
 }
 
+/// PDF417 error-correction level (FR-2.7).
+///
+/// A level from 0 to 8: each step roughly doubles the correction codewords, so a
+/// higher level recovers from more damage but holds less data. PDF417 numbers its
+/// levels directly (unlike QR's L/M/Q/H letters), so the plain digits are exposed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Pdf417Ec(pub(crate) u8);
+
+impl Pdf417Ec {
+    /// The level for `digit`, or `None` when it is outside `0..=8`.
+    ///
+    /// The command line validates the range too; this is the checked constructor
+    /// for callers that build a level in code.
+    #[must_use]
+    pub const fn from_digit(digit: u8) -> Option<Self> {
+        if digit <= 8 {
+            Some(Pdf417Ec(digit))
+        } else {
+            None
+        }
+    }
+
+    /// The numeric level, `0`-`8`.
+    #[must_use]
+    pub fn get(self) -> u8 {
+        self.0
+    }
+}
+
+impl Default for Pdf417Ec {
+    /// Level 2, the standard PDF417 default.
+    fn default() -> Self {
+        Pdf417Ec(2)
+    }
+}
+
+impl FromStr for Pdf417Ec {
+    type Err = String;
+
+    /// Parses a single digit `0`-`8`.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.parse::<u8>() {
+            Ok(level @ 0..=8) => Ok(Pdf417Ec(level)),
+            _ => Err(format!(
+                "invalid error-correction level: {s} (expected a digit 0-8)"
+            )),
+        }
+    }
+}
+
 /// How many QR modules are packed into a single terminal character cell (FR-3.11).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GlyphSet {
@@ -118,23 +168,27 @@ impl FromStr for Mode {
 
 /// The barcode symbology to draw (FR-2.7).
 ///
-/// Chosen by the command-line subcommand (`qr` / `datamatrix`) and independent of
-/// [`Mode`]: `--mode` picks how a symbol is rendered, the subcommand picks which
-/// symbol is produced. Kept as a value so renderers can caption multi-symbol runs.
+/// Chosen by the command-line subcommand (`qr` / `datamatrix` / `pdf417`) and
+/// independent of [`Mode`]: `--mode` picks how a symbol is rendered, the
+/// subcommand picks which symbol is produced. Kept as a value so renderers can
+/// caption multi-symbol runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format {
     /// An ordinary QR code.
     Qr,
     /// A Data Matrix (ECC 200) symbol.
     DataMatrix,
+    /// A PDF417 stacked linear symbol.
+    Pdf417,
 }
 
 /// Symbol-encoding parameters, one variant per [`Format`] (FR-2.7).
 ///
 /// Each symbology owns its own options: a QR code takes an error-correction
-/// level, while a Data Matrix has none (its correction is fixed by the symbol
-/// size). Keeping them here, rather than as flat fields on [`Config`], lets a
-/// format carry parameters the others do not understand.
+/// level from its four letters, a PDF417 takes one from its nine numeric levels,
+/// while a Data Matrix has none (its correction is fixed by the symbol size).
+/// Keeping them here, rather than as flat fields on [`Config`], lets a format
+/// carry parameters the others do not understand.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EncodeOptions {
     /// QR code parameters.
@@ -144,6 +198,16 @@ pub enum EncodeOptions {
     },
     /// Data Matrix (ECC 200) parameters: none are user-selectable.
     DataMatrix,
+    /// PDF417 parameters.
+    Pdf417 {
+        /// Requested error-correction level.
+        ec: Pdf417Ec,
+        /// Forced data-column count, or `None` to let the encoder pick a balanced
+        /// shape. Fewer columns make a narrower, taller symbol. Values outside
+        /// PDF417's `1..=30` range are clamped into it, so the command line's
+        /// `--columns` and direct callers both stay safe.
+        columns: Option<u32>,
+    },
 }
 
 impl EncodeOptions {
@@ -153,6 +217,7 @@ impl EncodeOptions {
         match self {
             EncodeOptions::Qr { .. } => Format::Qr,
             EncodeOptions::DataMatrix => Format::DataMatrix,
+            EncodeOptions::Pdf417 { .. } => Format::Pdf417,
         }
     }
 }
@@ -288,5 +353,39 @@ mod tests {
     fn encode_options_report_their_format() {
         assert_eq!(EncodeOptions::Qr { ec: Ec::M }.format(), Format::Qr);
         assert_eq!(EncodeOptions::DataMatrix.format(), Format::DataMatrix);
+        assert_eq!(
+            EncodeOptions::Pdf417 {
+                ec: Pdf417Ec(4),
+                columns: None,
+            }
+            .format(),
+            Format::Pdf417
+        );
+    }
+
+    #[test]
+    fn pdf417_ec_parses_the_digits_zero_through_eight() {
+        for level in 0..=8u8 {
+            assert_eq!(level.to_string().parse::<Pdf417Ec>(), Ok(Pdf417Ec(level)));
+        }
+    }
+
+    #[test]
+    fn pdf417_ec_rejects_out_of_range_and_non_numeric() {
+        for bad in ["9", "10", "-1", "", "L", "two"] {
+            assert!(bad.parse::<Pdf417Ec>().is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn pdf417_ec_defaults_to_level_two() {
+        assert_eq!(Pdf417Ec::default(), Pdf417Ec(2));
+    }
+
+    #[test]
+    fn pdf417_ec_from_digit_checks_the_range() {
+        assert_eq!(Pdf417Ec::from_digit(0), Some(Pdf417Ec(0)));
+        assert_eq!(Pdf417Ec::from_digit(8), Some(Pdf417Ec(8)));
+        assert_eq!(Pdf417Ec::from_digit(9), None);
     }
 }

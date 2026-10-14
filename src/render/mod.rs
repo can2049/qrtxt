@@ -47,11 +47,12 @@ pub struct RenderOptions {
 const KITTY_IMAGE_ID_BASE: u32 = 424_242;
 
 /// Caption prefix for a multi-symbol run: the symbology's full name, so the label
-/// reads unambiguously (`QR Code 1/3`, `Data Matrix 1/3`).
+/// reads unambiguously (`QR Code 1/3`, `Data Matrix 1/3`, `PDF417 1/3`).
 fn format_label(format: Format) -> &'static str {
     match format {
         Format::Qr => "QR Code",
         Format::DataMatrix => "Data Matrix",
+        Format::Pdf417 => "PDF417",
     }
 }
 
@@ -110,7 +111,7 @@ pub fn render_all(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Ec, EncodeOptions};
+    use crate::types::{Ec, EncodeOptions, Pdf417Ec};
 
     /// QR encode options at error level `ec`, for the tests.
     fn qr(ec: Ec) -> EncodeOptions {
@@ -247,5 +248,34 @@ mod tests {
     fn format_label_names_each_symbology() {
         assert_eq!(format_label(Format::Qr), "QR Code");
         assert_eq!(format_label(Format::DataMatrix), "Data Matrix");
+        assert_eq!(format_label(Format::Pdf417), "PDF417");
+    }
+
+    #[test]
+    fn render_all_labels_pdf417_captions() {
+        let codes = crate::encode::encode_multi(
+            &vec![b'a'; 4000],
+            &EncodeOptions::Pdf417 {
+                ec: Pdf417Ec(2),
+                columns: None,
+            },
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(codes.len() > 1, "expected a split");
+        let mut out = Vec::new();
+        render_all(
+            &codes,
+            Format::Pdf417,
+            RenderMode::Compact,
+            options(),
+            &mut out,
+        )
+        .unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("PDF417 1/"), "{text}");
+        assert!(!text.contains("QR Code "), "{text}");
+        assert!(!text.contains("Data Matrix "), "{text}");
     }
 }

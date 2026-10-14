@@ -971,3 +971,257 @@ fn datamatrix_max_bytes_split_round_trips_in_order() {
     }
     assert_eq!(assembled, payload);
 }
+
+// --- PDF417 -----------------------------------------------------------------
+//
+// PDF417 is decoded with `rxing`'s detector, which reads an image, not a bare
+// module grid. The parser turns the terminal output back into the module grid
+// and the helper below rebuilds a magnified black-and-white image from it, so the
+// rendered code is decoded through the same path a camera scanner would use.
+
+/// Render `args`, feeding `input` on standard input, and strip the colours.
+///
+/// Used for payloads that are not valid UTF-8 and so cannot be a positional
+/// argument.
+fn render_stdin(args: &[&str], input: &[u8]) -> String {
+    let output = Command::cargo_bin("qrtxt")
+        .expect("binary is built")
+        .args(args)
+        .write_stdin(input.to_vec())
+        .output()
+        .expect("runs");
+    assert!(output.status.success(), "qrtxt failed: {output:?}");
+    strip_ansi(&String::from_utf8(output.stdout).expect("utf-8 output"))
+}
+
+/// The single PDF417 symbol qrtxt would print for `payload`, for sizing the
+/// decoded region and for the encoder cross-checks below.
+fn pdf417_symbol(payload: &[u8], ec: u8) -> qrtxt::types::Symbol {
+    use qrtxt::types::{EncodeOptions, Pdf417Ec};
+
+    let options = EncodeOptions::Pdf417 {
+        ec: Pdf417Ec::from_digit(ec).expect("level 0-8"),
+        columns: None,
+    };
+    let mut codes = qrtxt::encode::encode_multi(payload, &options, None, None).expect("encodes");
+    assert_eq!(codes.len(), 1, "payload should fit one symbol");
+    codes.remove(0)
+}
+
+/// Rebuild a magnified luma image from the parsed grid and decode it.
+///
+/// `dark(x, y)` reports whether the module at `(x, y)` is a bar. PDF417 rows are
+/// short, so they are stretched more than QR modules (a factor of 8 vertically
+/// against 2 horizontally) to clear the detector's minimum barcode height.
+fn pdf417_decode(width: usize, height: usize, dark: impl Fn(usize, usize) -> bool) -> String {
+    let (sx, sy) = (2usize, 8usize);
+    let iw = width * sx;
+    let ih = height * sy;
+    let mut luma = vec![255u8; iw * ih];
+    for y in 0..height {
+        for x in 0..width {
+            if dark(x, y) {
+                for dy in 0..sy {
+                    for dx in 0..sx {
+                        luma[(y * sy + dy) * iw + x * sx + dx] = 0;
+                    }
+                }
+            }
+        }
+    }
+    rxing::helpers::detect_in_luma(
+        luma,
+        iw as u32,
+        ih as u32,
+        Some(rxing::BarcodeFormat::PDF_417),
+    )
+    .expect("PDF417 decodes")
+    .getText()
+    .to_owned()
+}
+
+/// Decode a non-inverted rendering: every inked cell is a bar, and the quiet zone
+/// and tile padding stay light, so no cropping is needed.
+fn decode_pdf417(text: &str, glyph: &str) -> String {
+    let (width, height, ink) = parse(text, glyph);
+    pdf417_decode(width, height, |x, y| ink[y * width + x])
+}
+
+/// Decode an inverted rendering, where the light modules carry the ink and the
+/// quiet zone stays light, so the module colours flip only inside the symbol.
+fn decode_pdf417_inverted(text: &str, glyph: &str, sym_w: usize, sym_h: usize) -> String {
+    let (width, height, ink) = parse(text, glyph);
+    pdf417_decode(width, height, |x, y| {
+        let inside = x >= DEFAULT_BORDER
+            && x < DEFAULT_BORDER + sym_w
+            && y >= DEFAULT_BORDER
+            && y < DEFAULT_BORDER + sym_h;
+        inside && !ink[y * width + x]
+    })
+}
+
+#[test]
+fn pdf417_ascii_round_trips() {
+    for payload in ["hello", "https://example.com/abc", "0123456789 ABCD xyz"] {
+        for glyph in ["half", "quadrant", "braille"] {
+            let text = render(&["pdf417", "--glyphs", glyph, payload]);
+            assert_eq!(
+                decode_pdf417(&text, glyph),
+                payload,
+                "glyph={glyph} payload={payload:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn pdf417_inverted_round_trips() {
+    let payload = "hello";
+    let symbol = pdf417_symbol(payload.as_bytes(), 2);
+    for glyph in ["half", "quadrant", "braille"] {
+        let text = render(&["pdf417", "--glyphs", glyph, "--invert", payload]);
+        assert_eq!(
+            decode_pdf417_inverted(&text, glyph, symbol.width(), symbol.height()),
+            payload,
+            "glyph={glyph}"
+        );
+    }
+}
+
+#[test]
+fn pdf417_non_ascii_round_trips() {
+    // Non-ASCII text is declared with a UTF-8 ECI and must decode exactly.
+    for payload in ["你好，世界", "参数 --file 文件", "한국어 테스트 😀"] {
+        let text = render(&["pdf417", payload]);
+        assert_eq!(decode_pdf417(&text, "half"), payload, "payload={payload:?}");
+    }
+}
+
+#[test]
+fn pdf417_binary_round_trips() {
+    // A payload that is not valid UTF-8 is mapped through Latin-1 by the encoder
+    // and comes back as the same bytes.
+    let payload = [0xff_u8, 0x00, 0x80, 0x41, 0x42, 0xfe];
+    let text = render_stdin(&["pdf417"], &payload);
+    let decoded: Vec<u8> = decode_pdf417(&text, "half")
+        .chars()
+        .map(|c| c as u8)
+        .collect();
+    assert_eq!(decoded, payload);
+}
+
+#[test]
+fn pdf417_higher_error_correction_round_trips() {
+    let payload = "redundancy at level six";
+    let text = render(&["pdf417", "-e", "6", payload]);
+    assert_eq!(decode_pdf417(&text, "half"), payload);
+}
+
+#[test]
+fn pdf417_columns_round_trip() {
+    // Forcing the column count reshapes the symbol; every shape still decodes.
+    let payload = "a payload shaped across a chosen number of columns";
+    for columns in ["1", "2", "5", "12"] {
+        let text = render(&["pdf417", "--columns", columns, payload]);
+        assert_eq!(decode_pdf417(&text, "half"), payload, "columns={columns}");
+    }
+}
+
+#[test]
+fn pdf417_columns_and_chunk_split_round_trip() {
+    // Regression: combining a forced column count with chunked splitting once
+    // panicked inside the encoder while it searched for a symbol size. The
+    // rendered multi-symbol output must now decode back in order.
+    let payload = "混合 columns and chunk ".repeat(80);
+    let text = render(&["pdf417", "-c", "4", "-C", "8", &payload]);
+    let blocks = multi_blocks(&text);
+    assert!(blocks.len() >= 4, "expected at least four codes");
+    let mut assembled = String::new();
+    for block in &blocks {
+        assembled.push_str(&decode_pdf417(block, "half"));
+    }
+    assert_eq!(assembled, payload);
+}
+
+#[test]
+fn pdf417_split_round_trips_in_order() {
+    // 4000 lowercase bytes exceed one symbol, so they are split and each block
+    // must decode back to its own segment, in order.
+    let payload = "a".repeat(4000);
+    let text = render(&["pdf417", &payload]);
+    let blocks = multi_blocks(&text);
+    assert!(blocks.len() > 1, "expected a split");
+    let mut assembled = String::new();
+    for block in &blocks {
+        assembled.push_str(&decode_pdf417(block, "half"));
+    }
+    assert_eq!(assembled, payload);
+}
+
+#[test]
+fn pdf417_max_bytes_split_round_trips_in_order() {
+    let payload = "a".repeat(600);
+    let text = render(&["pdf417", "--max-bytes", "100", &payload]);
+    let blocks = multi_blocks(&text);
+    assert_eq!(blocks.len(), 6, "600 bytes at 100 bytes per symbol");
+    let mut assembled = String::new();
+    for block in &blocks {
+        assembled.push_str(&decode_pdf417(block, "half"));
+    }
+    assert_eq!(assembled, payload);
+}
+
+#[test]
+fn pdf417_round_trips_at_every_error_level() {
+    for payload in ["hello", "https://example.com/abc", "参数 123"] {
+        for ec in 0..=8u8 {
+            let text = render(&["pdf417", "-e", &ec.to_string(), payload]);
+            assert_eq!(decode_pdf417(&text, "half"), payload, "ec={ec}");
+        }
+    }
+}
+
+#[test]
+fn pdf417_text_shapes_round_trip() {
+    // Each payload stresses a different compaction path: a long digit run
+    // (numeric), uppercase (text), punctuation/mixed, a single character, and a
+    // URL that mixes all of them.
+    for payload in [
+        "1234567890123456789012345678901234567890",
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+        "Mixed 123 !@#$%^&*()_+-=[]{}|;:'\",.<>/?",
+        "a",
+        "https://example.com/a/b?x=1&y=2#frag",
+    ] {
+        let text = render(&["pdf417", payload]);
+        assert_eq!(decode_pdf417(&text, "half"), payload, "payload={payload:?}");
+    }
+}
+
+#[test]
+fn pdf417_control_and_high_bytes_round_trip() {
+    // Every byte value — NUL, control codes and the whole high range — is not
+    // valid UTF-8, so it travels the Latin-1 path; it must come back unchanged.
+    let payload: Vec<u8> = (0u8..=255).collect();
+    let text = render_stdin(&["pdf417"], &payload);
+    let decoded: Vec<u8> = decode_pdf417(&text, "half")
+        .chars()
+        .map(|c| c as u8)
+        .collect();
+    assert_eq!(decoded, payload);
+}
+
+#[test]
+fn pdf417_columns_across_glyph_sets_round_trip() {
+    let payload = "columns and glyphs together";
+    for columns in ["1", "3", "12", "30"] {
+        for glyph in ["half", "quadrant", "braille"] {
+            let text = render(&["pdf417", "-C", columns, "--glyphs", glyph, payload]);
+            assert_eq!(
+                decode_pdf417(&text, glyph),
+                payload,
+                "columns={columns} glyph={glyph}"
+            );
+        }
+    }
+}

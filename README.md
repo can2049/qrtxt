@@ -8,7 +8,8 @@ Turn text into a QR code, right in your terminal.
 [![crates.io](https://img.shields.io/crates/v/qrtxt.svg)](https://crates.io/crates/qrtxt)
 
 `qrtxt` reads a string, a file, or piped input and prints an ordinary QR code.
-The `datamatrix` subcommand prints a Data Matrix (ECC 200) symbol instead. By
+The `datamatrix` subcommand prints a Data Matrix (ECC 200) symbol and `pdf417` a
+stacked PDF417 symbol instead. By
 default it picks the best rendering your terminal offers — a crisp bitmap over
 the Kitty or Sixel graphics protocol where supported, otherwise Unicode block
 characters, so a plain UTF-8 terminal always works.
@@ -36,11 +37,13 @@ quiet zone shows as blank space in this color-free transcript.)
 ## Features
 
 - **Three input modes** — a literal argument, a file (`--file`), or standard input.
-- **Two barcode formats** — one subcommand each: `qr` (an ordinary QR code) and
-  `datamatrix` (a Data Matrix (ECC 200) symbol).
-- **Exact error correction** — `L`, `M`, `Q`, or `H`, never silently boosted
-  (the `qr` subcommand only; a Data Matrix's correction is fixed by its symbol
-  size, so `datamatrix` has no such option).
+- **Three barcode formats** — one subcommand each: `qr` (an ordinary QR code),
+  `datamatrix` (a Data Matrix (ECC 200) symbol), and `pdf417` (a stacked PDF417
+  symbol).
+- **Per-format error correction** — the `qr` subcommand takes `L`, `M`, `Q`, or
+  `H` (never silently boosted) and `pdf417` its numeric levels `0`–`8`; a Data
+  Matrix's correction is fixed by its symbol size, so `datamatrix` has no such
+  option.
 - **Five render modes** — `--mode auto` (default) picks the best rendering the
   terminal offers: a crisp bitmap over the Kitty or Sixel graphics protocol where
   supported, otherwise Unicode block glyphs. Force a specific one with `text`,
@@ -92,13 +95,15 @@ qrtxt <COMMAND> [OPTIONS] [DATA]
 Commands:
   qr          Encode a QR code
   datamatrix  Encode a Data Matrix (ECC 200) symbol [alias: dm]
+  pdf417      Encode a PDF417 symbol [alias: pdf]
   help        Print this message or the help of the given subcommand(s)
 
 Options:
   -h, --help     Print help (see a summary with '-h')
   -V, --version  Print version
 
-The options below are shared by every subcommand; `qr` adds -e/--error-correction.
+The options below are shared by every subcommand; `qr` and `pdf417` each add
+their own -e/--error-correction.
 
 Payload:
   -f, --file <PATH>       Read the payload from a file
@@ -106,7 +111,9 @@ Payload:
   [DATA]                  Literal payload to encode
 
 Encoding:
-  -e, --error-correction <LEVEL>  (qr only) Error-correction level: L (about 7% recoverable), M (15%), Q (25%), or H (30%) [default: L]
+  -e, --error-correction <LEVEL>  (qr) Error-correction level: L (about 7% recoverable), M (15%), Q (25%), or H (30%) [default: L]
+                                  (pdf417) Error-correction level: 0 (least redundancy) to 8 (most) [default: 2]
+      --columns <N>               (pdf417) Force the data-column count (1-30); fewer columns make a narrower, taller symbol [short: -C, alias: --cl]
   -m, --max-bytes <BYTES>         Cap the payload of each symbol at BYTES bytes; implies splitting (default: the symbol's own limit)
   -c, --chunk <COUNT>             Split the payload across at least COUNT symbols; advisory (default: no minimum)
 
@@ -123,8 +130,8 @@ Source: https://github.com/can2049/qrtxt
 
 A bare invocation with no subcommand is treated as `qr`, so `qrtxt "hi"` and
 `cat token.txt | qrtxt` keep working. Run `qrtxt --help` for the command list,
-`qrtxt qr --help` or `qrtxt datamatrix --help` for the per-format options, and
-`qrtxt qr -h` for the short summary.
+`qrtxt qr --help`, `qrtxt datamatrix --help`, or `qrtxt pdf417 --help` for the
+per-format options, and `qrtxt qr -h` for the short summary.
 
 ## Examples
 
@@ -143,6 +150,18 @@ qrtxt qr --file payload.txt
 
 # a Data Matrix (ECC 200) symbol instead of a QR code
 qrtxt datamatrix "https://example.com"
+
+# a stacked PDF417 symbol
+qrtxt pdf417 "https://example.com"
+
+# a higher PDF417 error-correction level (0-8)
+qrtxt pdf417 --error-correction 6 "important payload"
+
+# a narrower, taller PDF417 (fits a narrow terminal)
+qrtxt pdf417 -C 1 "https://example.com"
+
+# the same, packed into half the cells
+qrtxt pdf417 --cl 1 --mode text --glyphs braille "https://example.com"
 
 # a crisp black-and-white bitmap (needs a Kitty-protocol terminal)
 qrtxt qr --mode kitty "https://example.com"
@@ -182,8 +201,9 @@ is drawn. Every format renders through every mode.
 
 | Subcommand | Symbol |
 |---|---|
-| `qr` (default) | An ordinary QR code. `--error-correction` applies. |
+| `qr` (default) | An ordinary QR code. `--error-correction` takes `L`/`M`/`Q`/`H`. |
 | `datamatrix` (`dm`) | A Data Matrix (ECC 200) symbol, always square. |
+| `pdf417` (`pdf`) | A stacked PDF417 symbol. `--error-correction` takes `0`–`8`. |
 
 A bare invocation with no subcommand is treated as `qr`, so `qrtxt "hi"` and
 `cat token.txt | qrtxt` keep working. A Data Matrix's error correction is fixed
@@ -192,8 +212,23 @@ by the symbol size, so `datamatrix` exposes no options and rejects
 
 A Data Matrix holds far less data per symbol than a QR code (about 1555 bytes
 versus 2953 at the lowest error level), so the same payload splits into more
-symbols. Non-ASCII text is declared with a UTF-8 ECI, exactly as for QR; many
-scanners handle that inconsistently, so prefer printable ASCII where you can.
+symbols. PDF417 holds less still — around 1068 bytes at its default level, or
+about 1075 at level 0 — and its error-correction levels work the opposite way to
+QR's: each step from `0` to `8` roughly doubles the correction codewords, so a
+higher level is more robust but holds less. Non-ASCII text is declared with a
+UTF-8 ECI, exactly as for QR; many scanners handle that inconsistently, so prefer
+printable ASCII where you can. Any payload a symbol cannot represent as UTF-8
+text — for instance raw binary — is encoded through a Latin-1 mapping that
+round-trips the original bytes.
+
+A PDF417 symbol is a stack of rows, so its shape is a width/height trade-off:
+by default the encoder picks a balanced one, which tends to be wide and short.
+Pass `--columns N` (1–30) to force the data-column count — the symbol is
+`17 × N + 69` modules wide and grows taller as `N` falls. `--columns 1` gives the
+narrowest, tallest code; larger values give wider, shorter ones. `-C` and `--cl`
+are accepted as short forms. For terminal
+width, `--mode text --glyphs quadrant` (or `braille`) also packs two modules per
+cell and roughly halves the printed width.
 
 ## Rendering modes
 
@@ -281,13 +316,13 @@ on every terminal, so check that a printed code still scans.
 
 ## Long payloads
 
-One QR symbol holds a bounded amount of data (about 2953 bytes at level `L`, less
-at higher levels). When the payload does not fit, `qrtxt` splits it across several
+One symbol holds a bounded amount of data (a QR code about 2953 bytes at level
+`L`, less at higher levels). When the payload does not fit, `qrtxt` splits it across several
 codes automatically — no flag needed — printing them in order under a `QR Code i/N`
-caption. The chunks are balanced, so every code carries a comparable amount of
-data, and cuts fall on character boundaries, so multi-byte characters are never
-broken between codes. A payload that fits one symbol is printed as a single,
-uncaptioned code.
+(or `Data Matrix i/N`, `PDF417 i/N`) caption. The chunks are balanced, so every
+code carries a comparable amount of data, and cuts fall on character boundaries,
+so multi-byte characters are never broken between codes. A payload that fits one
+symbol is printed as a single, uncaptioned code.
 
 Pass `--max-bytes BYTES` to cap the payload in each code (for smaller, easier-to-scan
 symbols). It implies splitting: even a payload that would fit one symbol is split
@@ -321,8 +356,8 @@ The crate is layered so that dependencies point in one direction only:
 - `cli` parses arguments (`parse`) and orchestrates the run (`run` / `run_with`).
 - `input`, `encode`, and `render` are pure and do not depend on `clap`.
 - `encode` wraps one barcode crate per symbology (`qrcode` for QR, `datamatrix`
-  for Data Matrix) and emits a symbology-agnostic `Symbol` — a dark/light module
-  grid — so only `encode` depends on a barcode library.
+  for Data Matrix, `rxing` for PDF417) and emits a symbology-agnostic `Symbol` —
+  a dark/light module grid — so only `encode` depends on a barcode library.
 - `kitty` and `sixel` hold the low-level protocol framing, shared by `cli` (the
   terminal probes) and `render` (bitmap transmission).
 - `types` holds the shared value types (including `Symbol`); `error` maps failures
@@ -337,8 +372,8 @@ emit a black-and-white bitmap over the Kitty or Sixel protocol. Each strategy li
 its own `render` submodule (`frame`, `text`, `ansi`, `bitmap`) behind the `render_all`
 dispatch. The round-trip test
 suite renders the output, strips the colour codes, reconstructs the module grid, and
-decodes it again — with `rqrr` for QR and the `datamatrix` crate for Data Matrix — to
-prove the printed code is still scannable.
+decodes it again — with `rqrr` for QR, the `datamatrix` crate for Data Matrix, and
+`rxing` for PDF417 — to prove the printed code is still scannable.
 
 ## License
 
