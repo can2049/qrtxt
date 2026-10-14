@@ -5,9 +5,9 @@
 //! [`help`]. Their public items are re-exported below so callers keep using the
 //! `cli::` path.
 //!
-//! The CLI is a subcommand per symbology (`qr` / `datamatrix`), so each format
-//! exposes only the options it understands; the options shared by every format
-//! live in [`CommonArgs`].
+//! The CLI is a subcommand per symbology (`qr` / `datamatrix` / `pdf417` /
+//! `aztec`), so each format exposes only the options it understands; the options
+//! shared by every format live in [`CommonArgs`].
 
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
@@ -15,7 +15,9 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand};
 
 use crate::error::AppError;
-use crate::types::{Config, Ec, EncodeOptions, GlyphSet, InputSpec, Mode, Pdf417Ec, RenderMode};
+use crate::types::{
+    AztecEc, Config, Ec, EncodeOptions, GlyphSet, InputSpec, Mode, Pdf417Ec, RenderMode,
+};
 
 mod help;
 mod parse;
@@ -24,22 +26,23 @@ mod probe;
 pub use help::{add_mode_hint, mode_support_hint};
 pub use parse::parse;
 
-/// Turn text into a terminal QR code, Data Matrix, or PDF417.
+/// Turn text into a terminal QR code, Data Matrix, PDF417, or Aztec Code.
 #[derive(Debug, Parser)]
 #[command(
     name = "qrtxt",
     version,
-    about = "Turn text into a terminal QR code, Data Matrix, or PDF417",
-    long_about = "Turn text into a terminal QR code, Data Matrix, or PDF417.\n\n\
+    about = "Turn text into a terminal QR code, Data Matrix, PDF417, or Aztec Code",
+    long_about = "Turn text into a terminal QR code, Data Matrix, PDF417, or Aztec Code.\n\n\
 Reads a payload from a literal argument, a file, or standard input and prints it as one or \
 more symbols. The subcommand chooses the symbology: `qr` draws an ordinary QR code, \
-`datamatrix` draws a Data Matrix (ECC 200) symbol, and `pdf417` draws a stacked PDF417 \
-symbol. By default the best rendering the terminal \
+`datamatrix` draws a Data Matrix (ECC 200) symbol, `pdf417` draws a stacked PDF417 \
+symbol, and `aztec` draws an Aztec Code symbol. By default the best rendering the terminal \
 offers is used: a crisp bitmap over the Kitty or Sixel graphics protocol where supported, \
 otherwise Unicode block characters, so a plain UTF-8 terminal always works. Use --mode to \
 force a specific renderer.\n\n\
 A payload too large for a single symbol is split automatically across several balanced \
-symbols, printed in order under a `QR Code i/N` (or `Data Matrix i/N`, `PDF417 i/N`) caption. \
+symbols, printed in order under a `QR Code i/N` (or `Data Matrix i/N`, `PDF417 i/N`, \
+`Aztec i/N`) caption. \
 Use --max-bytes to cap the bytes per symbol, or --chunk to require a minimum number of symbols.",
     after_help = "Source: https://github.com/can2049/qrtxt"
 )]
@@ -69,6 +72,9 @@ enum Command {
     /// Encode a PDF417 symbol.
     #[command(visible_alias = "pdf")]
     Pdf417(Pdf417Args),
+    /// Encode an Aztec Code symbol.
+    #[command(visible_alias = "az")]
+    Aztec(AztecArgs),
 }
 
 /// Options shared by every subcommand.
@@ -306,6 +312,45 @@ struct Pdf417Args {
     columns: Option<u32>,
 }
 
+/// Options for the `aztec` subcommand.
+///
+/// Aztec expresses its error correction as a percentage of the data (rather than
+/// QR's letters or PDF417's levels) and lets the caller pin the layer count.
+#[derive(Debug, Args)]
+struct AztecArgs {
+    #[command(flatten)]
+    common: CommonArgs,
+
+    /// Error-correction percentage: 0 (least redundancy, most data) to 100 (most).
+    ///
+    /// The minimum percentage of the symbol devoted to correction codewords.
+    /// ISO/IEC 24778 recommends at least 23%, and 33% is the usual default. A
+    /// higher value recovers from more damage but holds less data.
+    #[arg(
+        short = 'e',
+        long = "error-correction",
+        value_name = "PERCENT",
+        default_value = "33",
+        help_heading = "Encoding"
+    )]
+    error: AztecEc,
+
+    /// Force the layer count, shaping the symbol.
+    ///
+    /// A positive value (1-32) selects full-range layers; a negative value (-4 to
+    /// -1) selects compact layers, e.g. `--layers -3` (or `-l -3`). Left unset,
+    /// the encoder chooses the smallest symbol that holds the payload.
+    #[arg(
+        short = 'l',
+        long = "layers",
+        value_name = "N",
+        allow_hyphen_values = true,
+        value_parser = clap::value_parser!(i64).range(-4..=32),
+        help_heading = "Encoding"
+    )]
+    layers: Option<i64>,
+}
+
 impl Cli {
     /// Convert parsed arguments into a neutral configuration for `mode`.
     ///
@@ -327,6 +372,15 @@ impl Cli {
                     columns: args.columns,
                 },
             ),
+            Command::Aztec(args) => args.common.to_config(
+                mode,
+                EncodeOptions::Aztec {
+                    ec: args.error,
+                    // The command line caps `--layers` at `-4..=32`, so the cast
+                    // to `i8` is lossless.
+                    layers: args.layers.map(|layers| layers as i8),
+                },
+            ),
         }
     }
 
@@ -336,6 +390,7 @@ impl Cli {
             Command::Qr(args) => args.common.mode(),
             Command::Datamatrix(args) => args.common.mode(),
             Command::Pdf417(args) => args.common.mode(),
+            Command::Aztec(args) => args.common.mode(),
         }
     }
 }
@@ -436,7 +491,9 @@ mod tests {
     fn qr_ec(cfg: &Config) -> Ec {
         match cfg.encode {
             EncodeOptions::Qr { ec } => ec,
-            EncodeOptions::DataMatrix | EncodeOptions::Pdf417 { .. } => {
+            EncodeOptions::DataMatrix
+            | EncodeOptions::Pdf417 { .. }
+            | EncodeOptions::Aztec { .. } => {
                 panic!("expected QR options")
             }
         }
@@ -755,5 +812,128 @@ mod tests {
     fn qr_rejects_a_numeric_error_correction() {
         // The error-correction domain is per-format: QR still takes letters.
         assert!(Cli::try_parse_from(["qrtxt", "qr", "-e", "2", "x"]).is_err());
+    }
+
+    #[test]
+    fn aztec_subcommand_selects_aztec() {
+        let expected = EncodeOptions::Aztec {
+            ec: AztecEc(33),
+            layers: None,
+        };
+        assert_eq!(config(&["aztec", "x"]).encode, expected);
+        assert_eq!(config(&["az", "x"]).encode, expected);
+        assert_eq!(config(&["aztec", "x"]).encode.format(), Format::Aztec);
+    }
+
+    #[test]
+    fn aztec_error_correction_defaults_to_33_percent() {
+        assert_eq!(
+            config(&["aztec", "x"]).encode,
+            EncodeOptions::Aztec {
+                ec: AztecEc(33),
+                layers: None,
+            }
+        );
+    }
+
+    #[test]
+    fn aztec_error_correction_parses_a_percentage() {
+        for percent in [0u8, 23, 33, 100] {
+            let cfg = config(&["aztec", "-e", &percent.to_string(), "x"]);
+            assert_eq!(
+                cfg.encode,
+                EncodeOptions::Aztec {
+                    ec: AztecEc(percent),
+                    layers: None,
+                },
+                "percent {percent}"
+            );
+        }
+    }
+
+    #[test]
+    fn aztec_rejects_an_out_of_range_or_letter_error_correction() {
+        for percent in ["101", "-1", "H", "L"] {
+            assert!(
+                Cli::try_parse_from(["qrtxt", "aztec", "-e", percent, "x"]).is_err(),
+                "percent {percent:?} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn aztec_layers_flow_into_the_config() {
+        assert_eq!(
+            config(&["aztec", "--layers", "5", "x"]).encode,
+            EncodeOptions::Aztec {
+                ec: AztecEc(33),
+                layers: Some(5),
+            }
+        );
+        // Negative selects compact layers and must survive argument parsing.
+        assert_eq!(
+            config(&["aztec", "--layers", "-3", "x"]).encode,
+            EncodeOptions::Aztec {
+                ec: AztecEc(33),
+                layers: Some(-3),
+            }
+        );
+        assert_eq!(
+            config(&["aztec", "--layers", "0", "x"]).encode,
+            EncodeOptions::Aztec {
+                ec: AztecEc(33),
+                layers: Some(0),
+            }
+        );
+        assert_eq!(
+            config(&["aztec", "x"]).encode,
+            EncodeOptions::Aztec {
+                ec: AztecEc(33),
+                layers: None,
+            }
+        );
+    }
+
+    #[test]
+    fn aztec_layers_short_and_long_forms_match() {
+        let expected = EncodeOptions::Aztec {
+            ec: AztecEc(33),
+            layers: Some(5),
+        };
+        assert_eq!(config(&["aztec", "-l", "5", "x"]).encode, expected);
+        assert_eq!(config(&["aztec", "--layers", "5", "x"]).encode, expected);
+        // The short form accepts a negative value too.
+        assert_eq!(
+            config(&["aztec", "-l", "-3", "x"]).encode,
+            EncodeOptions::Aztec {
+                ec: AztecEc(33),
+                layers: Some(-3),
+            }
+        );
+    }
+
+    #[test]
+    fn aztec_rejects_out_of_range_layers() {
+        for layers in ["33", "-5", "sixty"] {
+            assert!(
+                Cli::try_parse_from(["qrtxt", "aztec", "--layers", layers, "x"]).is_err(),
+                "layers {layers:?} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn other_formats_reject_the_aztec_layers_option() {
+        for command in ["qr", "datamatrix", "pdf417"] {
+            assert!(
+                Cli::try_parse_from(["qrtxt", command, "--layers", "5", "x"]).is_err(),
+                "{command} should reject --layers"
+            );
+        }
+    }
+
+    #[test]
+    fn aztec_rejects_the_pdf417_columns_option() {
+        assert!(Cli::try_parse_from(["qrtxt", "aztec", "--columns", "5", "x"]).is_err());
     }
 }

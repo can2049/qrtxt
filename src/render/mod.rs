@@ -47,12 +47,14 @@ pub struct RenderOptions {
 const KITTY_IMAGE_ID_BASE: u32 = 424_242;
 
 /// Caption prefix for a multi-symbol run: the symbology's full name, so the label
-/// reads unambiguously (`QR Code 1/3`, `Data Matrix 1/3`, `PDF417 1/3`).
+/// reads unambiguously (`QR Code 1/3`, `Data Matrix 1/3`, `PDF417 1/3`,
+/// `Aztec 1/3`).
 fn format_label(format: Format) -> &'static str {
     match format {
         Format::Qr => "QR Code",
         Format::DataMatrix => "Data Matrix",
         Format::Pdf417 => "PDF417",
+        Format::Aztec => "Aztec",
     }
 }
 
@@ -111,7 +113,7 @@ pub fn render_all(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Ec, EncodeOptions, Pdf417Ec};
+    use crate::types::{AztecEc, Ec, EncodeOptions, Pdf417Ec};
 
     /// QR encode options at error level `ec`, for the tests.
     fn qr(ec: Ec) -> EncodeOptions {
@@ -249,6 +251,35 @@ mod tests {
         assert_eq!(format_label(Format::Qr), "QR Code");
         assert_eq!(format_label(Format::DataMatrix), "Data Matrix");
         assert_eq!(format_label(Format::Pdf417), "PDF417");
+        assert_eq!(format_label(Format::Aztec), "Aztec");
+    }
+
+    #[test]
+    fn render_all_labels_aztec_captions() {
+        let codes = crate::encode::encode_multi(
+            &vec![b'a'; 6000],
+            &EncodeOptions::Aztec {
+                ec: AztecEc(33),
+                layers: None,
+            },
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(codes.len() > 1, "expected a split");
+        let mut out = Vec::new();
+        render_all(
+            &codes,
+            Format::Aztec,
+            RenderMode::Compact,
+            options(),
+            &mut out,
+        )
+        .unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("Aztec 1/"), "{text}");
+        assert!(!text.contains("QR Code "), "{text}");
+        assert!(!text.contains("PDF417 "), "{text}");
     }
 
     #[test]

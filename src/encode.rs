@@ -1,19 +1,20 @@
 //! Symbol encoding, wrapping a barcode crate per symbology (FR-2.*).
 //!
 //! QR codes come from the `qrcode` crate and Data Matrix (ECC 200) codes from
-//! the `datamatrix` crate; both are converted to the neutral [`Symbol`] grid so
-//! nothing downstream depends on either library.
+//! the `datamatrix` crate; PDF417 and Aztec come from `rxing`. Each is converted
+//! to the neutral [`Symbol`] grid so nothing downstream depends on any library.
 
 use datamatrix::{DataMatrix, SymbolList};
 use qrcode::bits::Bits;
 use qrcode::optimize::{Parser, Segment};
 use qrcode::types::{Mode, QrError};
 use qrcode::{Color, EcLevel, QrCode, Version};
-use rxing::common::CharacterSet;
+use rxing::aztec::encoder::aztec_encoder;
+use rxing::common::{BitMatrix, CharacterSet};
 use rxing::pdf417::encoder::PDF417;
 
 use crate::error::AppError;
-use crate::types::{Ec, EncodeOptions, Pdf417Ec, Symbol};
+use crate::types::{AztecEc, Ec, EncodeOptions, Pdf417Ec, Symbol};
 
 /// ECI designator for UTF-8 (ISO/IEC 18004 assignment 26).
 const UTF8_ECI: u32 = 26;
@@ -351,6 +352,104 @@ fn matrix_to_symbol(matrix: &[Vec<u8>]) -> Symbol {
     Symbol::new(width, height, dark)
 }
 
+/// Upper bound on the bytes a single Aztec symbol can hold: the bound for the
+/// split search.
+///
+/// The largest full-range symbol (32 layers) holds about 1914 byte-mode bytes or
+/// 3832 alphanumeric characters at the spec's minimum correction; this rounds
+/// that up. Being an over-estimate only costs a few extra probes in
+/// [`max_prefix_fitting`]; an under-estimate would wrongly split a large symbol.
+const AZTEC_MAX_BYTES: usize = 4096;
+
+/// Aztec's layer bounds (ISO/IEC 24778): a full-range symbol has at most 32
+/// layers, a compact one at most 4, so the signed range is `-4..=32`.
+const AZTEC_MAX_LAYERS: i32 = 32;
+const AZTEC_MIN_LAYERS: i32 = -4;
+
+/// Aztec Codec: the `rxing` crate's low-level encoder.
+///
+/// Aztec expresses its error correction as a percentage of the data and lets the
+/// caller pin the layer count; both reach the encoder after this validation, so
+/// neither the command line nor a direct caller can push it out of range.
+struct AztecCodec {
+    ec: AztecEc,
+    layers: Option<i8>,
+}
+
+impl Codec for AztecCodec {
+    fn encode(&self, data: &[u8]) -> Result<Symbol, AppError> {
+        aztec_symbol(data, self.ec, self.layers).map_err(|()| {
+            let max = max_prefix_fitting(self, data);
+            AppError::Input(format!(
+                "input too long: {} bytes (maximum {} bytes in an Aztec symbol at error-correction {}%)",
+                data.len(),
+                max,
+                self.ec.get()
+            ))
+        })
+    }
+
+    fn fits(&self, data: &[u8]) -> bool {
+        aztec_symbol(data, self.ec, self.layers).is_ok()
+    }
+
+    fn capacity(&self) -> usize {
+        AZTEC_MAX_BYTES
+    }
+}
+
+/// The `rxing` layer value for a requested count.
+///
+/// `None` means the smallest symbol that fits (rxing's `0`); a positive value is
+/// a full-range layer count, a negative one a compact layer count. Out-of-range
+/// values are clamped into Aztec's `-4..=32`, where a public `layers` field
+/// would otherwise reach rxing's "Illegal value for layers" error.
+fn aztec_layers(layers: Option<i8>) -> i32 {
+    match layers {
+        None => aztec_encoder::DEFAULT_AZTEC_LAYERS,
+        Some(layers) => i32::from(layers).clamp(AZTEC_MIN_LAYERS, AZTEC_MAX_LAYERS),
+    }
+}
+
+/// Encode `data` into a single Aztec symbol as a neutral [`Symbol`].
+///
+/// Unlike PDF417, Aztec's encoder takes raw bytes, so the payload reaches it
+/// unchanged. Non-ASCII UTF-8 text is declared with a UTF-8 ECI so scanners do
+/// not fall back to a legacy charset (the same reasoning as the QR and PDF417
+/// encoders); ASCII and non-UTF-8 binary are encoded in the default ISO-8859-1
+/// charset with no ECI, which preserves the bytes exactly. `ec` is the minimum
+/// error-correction percentage and `layers` pins the shape (see [`aztec_layers`]).
+/// Fails only for a payload too large for a single symbol at the requested shape.
+fn aztec_symbol(data: &[u8], ec: AztecEc, layers: Option<i8>) -> Result<Symbol, ()> {
+    let percent = u32::from(ec.get());
+    let layers = aztec_layers(layers);
+    let code = match std::str::from_utf8(data) {
+        Ok(text) if !text.is_ascii() => {
+            aztec_encoder::encode_bytes_with_charset(data, percent, layers, CharacterSet::UTF8)
+        }
+        _ => aztec_encoder::encode_bytes(data, percent, layers),
+    }
+    .map_err(|_| ())?;
+    Ok(bit_matrix_to_symbol(code.getMatrix()))
+}
+
+/// Convert `rxing`'s Aztec bit matrix into the neutral [`Symbol`] grid.
+///
+/// `rxing`'s `BitMatrix` is already top-down (row `0` is the top row), so the
+/// grid is read directly with no row reversal — unlike the bottom-up PDF417
+/// matrix above.
+fn bit_matrix_to_symbol(matrix: &BitMatrix) -> Symbol {
+    let width = matrix.getWidth() as usize;
+    let height = matrix.getHeight() as usize;
+    let mut dark = vec![false; width * height];
+    for y in 0..height {
+        for x in 0..width {
+            dark[y * width + x] = matrix.get(x as u32, y as u32);
+        }
+    }
+    Symbol::new(width, height, dark)
+}
+
 /// Encode `data` into an ordinary QR code at the exact error level.
 ///
 /// `qrcode` never boosts the error level, matching qrpipe's `boost_error=false`.
@@ -377,6 +476,7 @@ pub fn encode_multi(
     let qr;
     let datamatrix = DataMatrixCodec;
     let pdf417;
+    let aztec;
     let codec: &dyn Codec = match encode {
         EncodeOptions::Qr { ec } => {
             qr = QrCodec { ec: *ec };
@@ -389,6 +489,13 @@ pub fn encode_multi(
                 columns: *columns,
             };
             &pdf417
+        }
+        EncodeOptions::Aztec { ec, layers } => {
+            aztec = AztecCodec {
+                ec: *ec,
+                layers: *layers,
+            };
+            &aztec
         }
     };
     split_chunks_with(codec, data, max_bytes, min_chunks)
@@ -991,6 +1098,208 @@ mod tests {
         let data = vec![b'a'; 1500];
         assert!(pdf417_codec(0, None).fits(&data), "level 0");
         assert!(!pdf417_codec(8, None).fits(&data), "level 8");
+    }
+
+    /// Aztec options at error-correction percentage `ec`, for the tests.
+    fn aztec(ec: u8) -> EncodeOptions {
+        EncodeOptions::Aztec {
+            ec: AztecEc(ec),
+            layers: None,
+        }
+    }
+
+    /// An Aztec codec with an optional forced layer count, for the tests.
+    fn aztec_codec(ec: u8, layers: Option<i8>) -> AztecCodec {
+        AztecCodec {
+            ec: AztecEc(ec),
+            layers,
+        }
+    }
+
+    #[test]
+    fn aztec_encodes_a_square_symbol() {
+        let symbol = aztec_codec(33, None).encode(b"hello").unwrap();
+        assert_eq!(symbol.width(), symbol.height(), "Aztec is square");
+        assert_eq!(symbol.width() % 2, 1, "Aztec sizes are odd");
+    }
+
+    #[test]
+    fn aztec_encodes_non_ascii_text_and_raw_bytes() {
+        // Non-ASCII UTF-8 is declared with a UTF-8 ECI; non-UTF-8 bytes use the
+        // default ISO-8859-1 charset. Both must encode without error.
+        for data in [
+            "你好，世界".as_bytes(),
+            "参数 --file 文件".as_bytes(),
+            &[0xff, 0x00, 0x80, 0x41, 0x42],
+        ] {
+            assert!(
+                encode_multi(data, &aztec(33), None, None).is_ok(),
+                "failed for {data:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn aztec_splits_an_oversized_payload() {
+        let codes = encode_multi(&vec![b'a'; 6000], &aztec(33), None, None).unwrap();
+        assert!(codes.len() > 1, "expected more than one symbol");
+    }
+
+    #[test]
+    fn aztec_split_covers_the_payload() {
+        let data: Vec<u8> = (0..6000u32).map(|i| b'a' + (i % 26) as u8).collect();
+        let chunks = split_chunks_with(&aztec_codec(33, None), &data, None, None);
+        assert!(chunks.len() > 1, "expected a split");
+        assert_eq!(chunks.concat(), data);
+    }
+
+    #[test]
+    fn aztec_reports_the_ceiling_for_an_oversized_input() {
+        let huge = vec![0xffu8; 6000];
+        let Err(AppError::Input(message)) = aztec_codec(33, None).encode(&huge) else {
+            panic!("expected an input error");
+        };
+        assert!(message.contains("Aztec"), "{message}");
+        assert!(message.contains("6000"), "{message}");
+        assert!(message.contains("33%"), "{message}");
+    }
+
+    #[test]
+    fn aztec_single_symbol_capacity_is_within_the_bound_and_tight() {
+        // `capacity()` only bounds the split search, so it must be an upper bound
+        // of the true ceiling; `fits` at `max` and `!fits` at `max + 1` pin it.
+        let codec = aztec_codec(23, None);
+        let big = vec![b'a'; AZTEC_MAX_BYTES + 500];
+        let max = max_prefix_fitting(&codec, &big);
+        assert!(max > 0, "the bound must admit a non-empty symbol");
+        assert!(max <= AZTEC_MAX_BYTES, "the bound must hold");
+        assert!(codec.fits(&big[..max]), "the largest prefix must fit");
+        if max < AZTEC_MAX_BYTES {
+            assert!(!codec.fits(&big[..max + 1]), "max + 1 must not fit");
+        }
+    }
+
+    #[test]
+    fn aztec_layers_pin_the_symbol_shape() {
+        // A positive layer count selects full-range layers, a negative one compact
+        // layers, which are smaller for the same payload.
+        let full = aztec_codec(33, Some(4)).encode(b"hello").unwrap();
+        let compact = aztec_codec(33, Some(-4)).encode(b"hello").unwrap();
+        assert!(
+            compact.width() < full.width(),
+            "compact {} vs full {}",
+            compact.width(),
+            full.width()
+        );
+        // The automatic shape is no larger than the forced full-range one.
+        let auto = aztec_codec(33, None).encode(b"hello").unwrap();
+        assert!(
+            auto.width() <= full.width(),
+            "auto {} vs full {}",
+            auto.width(),
+            full.width()
+        );
+    }
+
+    #[test]
+    fn aztec_out_of_range_layers_are_clamped_not_panicking() {
+        // `layers` is a public field; every value must clamp into -4..=32 rather
+        // than reaching rxing's "Illegal value for layers" error path.
+        assert_eq!(aztec_layers(None), 0);
+        assert_eq!(aztec_layers(Some(0)), 0);
+        assert_eq!(aztec_layers(Some(5)), 5);
+        assert_eq!(aztec_layers(Some(-3)), -3);
+        assert_eq!(aztec_layers(Some(99)), AZTEC_MAX_LAYERS);
+        assert_eq!(aztec_layers(Some(-99)), AZTEC_MIN_LAYERS);
+        assert_eq!(aztec_layers(Some(i8::MIN)), AZTEC_MIN_LAYERS);
+        assert_eq!(aztec_layers(Some(i8::MAX)), AZTEC_MAX_LAYERS);
+        for layers in [i8::MIN, -5, 33, i8::MAX] {
+            assert!(aztec_codec(33, Some(layers)).encode(b"hello").is_ok());
+        }
+    }
+
+    #[test]
+    fn aztec_layers_too_few_for_the_payload_fail() {
+        // A one-layer compact symbol holds very little, so a larger payload is
+        // reported as an input error instead of being forced in.
+        let data = vec![b'a'; 500];
+        assert!(
+            aztec_codec(33, None).fits(&data),
+            "the automatic shape fits"
+        );
+        assert!(
+            !aztec_codec(33, Some(-1)).fits(&data),
+            "one compact layer is too small"
+        );
+    }
+
+    #[test]
+    fn aztec_higher_error_correction_holds_less_data() {
+        let big = vec![b'a'; AZTEC_MAX_BYTES + 500];
+        let low = max_prefix_fitting(&aztec_codec(5, None), &big);
+        let high = max_prefix_fitting(&aztec_codec(80, None), &big);
+        assert!(low > high, "low {low} should hold more than high {high}");
+    }
+
+    #[test]
+    fn aztec_api_never_panics_across_params_and_payloads() {
+        // The cross-product of error-correction percentages, layer counts and
+        // payload shapes, including empty, binary and oversized inputs: every call
+        // must return and `fits` must agree with `encode`. Oversized payloads that
+        // never fit are kept small here to keep the sweep fast; the split path and
+        // the reported ceiling are covered separately.
+        let mut payloads: Vec<Vec<u8>> = vec![
+            Vec::new(),
+            b"a".to_vec(),
+            b"hello".to_vec(),
+            b"https://example.com/abc".to_vec(),
+            vec![0xff, 0x00, 0x80, 0x41, 0x42],
+            "你好，世界".as_bytes().to_vec(),
+            "mixed 混合 😀".as_bytes().to_vec(),
+        ];
+        for len in [500usize, 1200] {
+            payloads.push(vec![b'a'; len]);
+        }
+        let percents = [0u8, 33, 100];
+        let layers: [Option<i8>; 6] = [None, Some(1), Some(-1), Some(32), Some(99), Some(-99)];
+        for percent in percents {
+            for layers in layers {
+                let codec = aztec_codec(percent, layers);
+                for data in &payloads {
+                    let fits = codec.fits(data);
+                    let encoded = codec.encode(data);
+                    assert_eq!(
+                        fits,
+                        encoded.is_ok(),
+                        "percent={percent} layers={layers:?} len={}",
+                        data.len()
+                    );
+                    if let Ok(symbol) = encoded {
+                        assert!(symbol.width() > 0 && symbol.height() > 0);
+                        assert_eq!(symbol.width(), symbol.height(), "Aztec is square");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn aztec_extreme_layers_do_not_panic_through_the_split_path() {
+        for layers in [i8::MIN, -5, 33, i8::MAX] {
+            let data = vec![b'a'; 6000];
+            let codes = encode_multi(
+                &data,
+                &EncodeOptions::Aztec {
+                    ec: AztecEc(33),
+                    layers: Some(layers),
+                },
+                None,
+                None,
+            )
+            .expect("splits without panicking");
+            assert!(!codes.is_empty(), "layers={layers}");
+            assert!(codes.iter().all(|code| code.width() % 2 == 1));
+        }
     }
 
     #[test]

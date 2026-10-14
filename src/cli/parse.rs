@@ -47,6 +47,8 @@ fn inject_default_subcommand(mut args: Vec<OsString>) -> Vec<OsString> {
                 | "dm"
                 | "pdf417"
                 | "pdf"
+                | "aztec"
+                | "az"
                 | "help"
                 | "-h"
                 | "--help"
@@ -140,6 +142,8 @@ mod tests {
             &["qrtxt", "dm", "x"][..],
             &["qrtxt", "pdf417", "x"][..],
             &["qrtxt", "pdf", "x"][..],
+            &["qrtxt", "aztec", "x"][..],
+            &["qrtxt", "az", "x"][..],
             &["qrtxt", "help"][..],
         ] {
             let expected: Vec<String> = items.iter().map(|arg| arg.to_string()).collect();

@@ -88,6 +88,57 @@ impl FromStr for Pdf417Ec {
     }
 }
 
+/// Aztec error-correction percentage (FR-2.8).
+///
+/// Aztec expresses its redundancy as a percentage of the data rather than a fixed
+/// set of levels: higher values recover from more damage but hold less data.
+/// ISO/IEC 24778 recommends at least 23% plus three codewords, and 33% is the
+/// usual default.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AztecEc(pub(crate) u8);
+
+impl AztecEc {
+    /// The level for `percent`, or `None` when it is outside `0..=100`.
+    ///
+    /// The command line validates the range too; this is the checked constructor
+    /// for callers that build a level in code.
+    #[must_use]
+    pub const fn from_percent(percent: u8) -> Option<Self> {
+        if percent <= 100 {
+            Some(AztecEc(percent))
+        } else {
+            None
+        }
+    }
+
+    /// The percentage, `0`-`100`.
+    #[must_use]
+    pub fn get(self) -> u8 {
+        self.0
+    }
+}
+
+impl Default for AztecEc {
+    /// 33%, the usual Aztec default.
+    fn default() -> Self {
+        AztecEc(33)
+    }
+}
+
+impl FromStr for AztecEc {
+    type Err = String;
+
+    /// Parses a percentage from `0` to `100`.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.parse::<u8>() {
+            Ok(percent @ 0..=100) => Ok(AztecEc(percent)),
+            _ => Err(format!(
+                "invalid error-correction percentage: {s} (expected 0-100)"
+            )),
+        }
+    }
+}
+
 /// How many QR modules are packed into a single terminal character cell (FR-3.11).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GlyphSet {
@@ -168,9 +219,9 @@ impl FromStr for Mode {
 
 /// The barcode symbology to draw (FR-2.7).
 ///
-/// Chosen by the command-line subcommand (`qr` / `datamatrix` / `pdf417`) and
-/// independent of [`Mode`]: `--mode` picks how a symbol is rendered, the
-/// subcommand picks which symbol is produced. Kept as a value so renderers can
+/// Chosen by the command-line subcommand (`qr` / `datamatrix` / `pdf417` /
+/// `aztec`) and independent of [`Mode`]: `--mode` picks how a symbol is rendered,
+/// the subcommand picks which symbol is produced. Kept as a value so renderers can
 /// caption multi-symbol runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format {
@@ -180,6 +231,8 @@ pub enum Format {
     DataMatrix,
     /// A PDF417 stacked linear symbol.
     Pdf417,
+    /// An Aztec Code symbol.
+    Aztec,
 }
 
 /// Symbol-encoding parameters, one variant per [`Format`] (FR-2.7).
@@ -208,6 +261,17 @@ pub enum EncodeOptions {
         /// `--columns` and direct callers both stay safe.
         columns: Option<u32>,
     },
+    /// Aztec Code parameters.
+    Aztec {
+        /// Requested error-correction percentage (`0`-`100`).
+        ec: AztecEc,
+        /// Forced layer count, or `None` to use the smallest symbol that fits. A
+        /// positive value selects full-range layers, a negative value selects
+        /// compact layers (e.g. `-3` is a three-layer compact symbol). Values
+        /// outside Aztec's `-4..=32` range are clamped, so the command line's
+        /// `--layers` and direct callers both stay safe.
+        layers: Option<i8>,
+    },
 }
 
 impl EncodeOptions {
@@ -218,6 +282,7 @@ impl EncodeOptions {
             EncodeOptions::Qr { .. } => Format::Qr,
             EncodeOptions::DataMatrix => Format::DataMatrix,
             EncodeOptions::Pdf417 { .. } => Format::Pdf417,
+            EncodeOptions::Aztec { .. } => Format::Aztec,
         }
     }
 }
@@ -361,6 +426,40 @@ mod tests {
             .format(),
             Format::Pdf417
         );
+        assert_eq!(
+            EncodeOptions::Aztec {
+                ec: AztecEc(33),
+                layers: None,
+            }
+            .format(),
+            Format::Aztec
+        );
+    }
+
+    #[test]
+    fn aztec_ec_parses_the_percentage_range() {
+        for percent in [0u8, 23, 33, 100] {
+            assert_eq!(percent.to_string().parse::<AztecEc>(), Ok(AztecEc(percent)));
+        }
+    }
+
+    #[test]
+    fn aztec_ec_rejects_out_of_range_and_non_numeric() {
+        for bad in ["101", "255", "-1", "", "x", "33%"] {
+            assert!(bad.parse::<AztecEc>().is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn aztec_ec_defaults_to_33_percent() {
+        assert_eq!(AztecEc::default(), AztecEc(33));
+    }
+
+    #[test]
+    fn aztec_ec_from_percent_checks_the_range() {
+        assert_eq!(AztecEc::from_percent(0), Some(AztecEc(0)));
+        assert_eq!(AztecEc::from_percent(100), Some(AztecEc(100)));
+        assert_eq!(AztecEc::from_percent(101), None);
     }
 
     #[test]

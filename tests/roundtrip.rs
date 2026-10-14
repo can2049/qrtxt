@@ -1225,3 +1225,166 @@ fn pdf417_columns_across_glyph_sets_round_trip() {
         }
     }
 }
+
+// --- Aztec ------------------------------------------------------------------
+//
+// Aztec, like PDF417, is decoded with `rxing`'s detector through an image rather
+// than a bare module grid. The parser turns the terminal output back into the
+// module grid and the helper below rebuilds a magnified black-and-white image
+// from it, so the rendered code is decoded the way a camera scanner would.
+
+/// The single Aztec symbol qrtxt would print for `payload`, for sizing the
+/// decoded region in the inverted test.
+fn aztec_symbol(payload: &[u8], percent: u8, layers: Option<i8>) -> qrtxt::types::Symbol {
+    use qrtxt::types::{AztecEc, EncodeOptions};
+
+    let options = EncodeOptions::Aztec {
+        ec: AztecEc::from_percent(percent).expect("percentage 0-100"),
+        layers,
+    };
+    let mut codes = qrtxt::encode::encode_multi(payload, &options, None, None).expect("encodes");
+    assert_eq!(codes.len(), 1, "payload should fit one symbol");
+    codes.remove(0)
+}
+
+/// Rebuild a magnified square luma image from the parsed grid and decode it.
+///
+/// `dark(x, y)` reports whether the module at `(x, y)` is ink. The symbol is
+/// square, so both axes are scaled equally; the quiet zone in the parsed grid
+/// stays light and marks the symbol boundary for the detector.
+fn aztec_decode(width: usize, height: usize, dark: impl Fn(usize, usize) -> bool) -> String {
+    let scale = 4usize;
+    let iw = width * scale;
+    let ih = height * scale;
+    let mut luma = vec![255u8; iw * ih];
+    for y in 0..height {
+        for x in 0..width {
+            if dark(x, y) {
+                for dy in 0..scale {
+                    for dx in 0..scale {
+                        luma[(y * scale + dy) * iw + x * scale + dx] = 0;
+                    }
+                }
+            }
+        }
+    }
+    rxing::helpers::detect_in_luma(
+        luma,
+        iw as u32,
+        ih as u32,
+        Some(rxing::BarcodeFormat::AZTEC),
+    )
+    .expect("Aztec decodes")
+    .getText()
+    .to_owned()
+}
+
+/// Decode a non-inverted Aztec rendering: dark modules are ink and the quiet zone
+/// stays light.
+fn decode_aztec(text: &str, glyph: &str) -> String {
+    let (width, height, ink) = parse(text, glyph);
+    aztec_decode(width, height, |x, y| ink[y * width + x])
+}
+
+#[test]
+fn aztec_ascii_round_trips() {
+    for payload in ["hello", "https://example.com/abc", "0123456789 ABCD xyz"] {
+        for glyph in ["half", "quadrant", "braille"] {
+            let text = render(&["aztec", "--glyphs", glyph, payload]);
+            assert_eq!(
+                decode_aztec(&text, glyph),
+                payload,
+                "glyph={glyph} payload={payload:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn aztec_non_ascii_round_trips() {
+    // Non-ASCII text is declared with a UTF-8 ECI and must decode exactly.
+    for payload in ["你好，世界", "参数 --file 文件", "한국어 테스트 😀"] {
+        let text = render(&["aztec", payload]);
+        assert_eq!(decode_aztec(&text, "half"), payload, "payload={payload:?}");
+    }
+}
+
+#[test]
+fn aztec_binary_round_trips() {
+    // A payload that is not valid UTF-8 keeps the default Latin-1 charset and
+    // comes back as the same bytes.
+    let payload = [0xff_u8, 0x00, 0x80, 0x41, 0x42, 0xfe];
+    let text = render_stdin(&["aztec"], &payload);
+    let decoded: Vec<u8> = decode_aztec(&text, "half")
+        .chars()
+        .map(|c| c as u8)
+        .collect();
+    assert_eq!(decoded, payload);
+}
+
+#[test]
+fn aztec_inverted_round_trips() {
+    // Inverted: the light modules carry the ink inside the symbol; the quiet zone
+    // stays light. Only the `half` glyph is used, so no tile padding can shift the
+    // symbol's offset.
+    let payload = "hello";
+    let symbol = aztec_symbol(payload.as_bytes(), 33, None);
+    let text = render(&["aztec", "--glyphs", "half", "--invert", payload]);
+    let (width, height, ink) = parse(&text, "half");
+    let decoded = aztec_decode(width, height, |x, y| {
+        let inside = x >= DEFAULT_BORDER
+            && x < DEFAULT_BORDER + symbol.width()
+            && y >= DEFAULT_BORDER
+            && y < DEFAULT_BORDER + symbol.height();
+        inside && !ink[y * width + x]
+    });
+    assert_eq!(decoded, payload);
+}
+
+#[test]
+fn aztec_error_correction_round_trips() {
+    let payload = "higher redundancy";
+    for percent in ["0", "23", "33", "60", "100"] {
+        let text = render(&["aztec", "-e", percent, payload]);
+        assert_eq!(decode_aztec(&text, "half"), payload, "percent={percent}");
+    }
+}
+
+#[test]
+fn aztec_layers_round_trip() {
+    // Positive layer counts force full-range layers, negative ones compact; every
+    // shape still decodes.
+    let payload = "aztec";
+    for layers in ["1", "5", "-1", "-4"] {
+        let text = render(&["aztec", "--layers", layers, payload]);
+        assert_eq!(decode_aztec(&text, "half"), payload, "layers={layers}");
+    }
+}
+
+#[test]
+fn aztec_split_round_trips_in_order() {
+    // 6000 lowercase bytes exceed one symbol, so they are split and each block
+    // must decode back to its own segment, in order.
+    let payload = "a".repeat(6000);
+    let text = render(&["aztec", &payload]);
+    let blocks = multi_blocks(&text);
+    assert!(blocks.len() > 1, "expected a split");
+    let mut assembled = String::new();
+    for block in &blocks {
+        assembled.push_str(&decode_aztec(block, "half"));
+    }
+    assert_eq!(assembled, payload);
+}
+
+#[test]
+fn aztec_max_bytes_split_round_trips_in_order() {
+    let payload = "a".repeat(600);
+    let text = render(&["aztec", "--max-bytes", "100", &payload]);
+    let blocks = multi_blocks(&text);
+    assert_eq!(blocks.len(), 6, "600 bytes at 100 bytes per symbol");
+    let mut assembled = String::new();
+    for block in &blocks {
+        assembled.push_str(&decode_aztec(block, "half"));
+    }
+    assert_eq!(assembled, payload);
+}
