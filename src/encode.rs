@@ -256,11 +256,26 @@ impl Codec for Pdf417Codec {
     }
 }
 
-/// PDF417's row bounds (ISO/IEC 15438): at least 3 rows, at most 90. Applied when
-/// `--columns` pins the column count, so the symbol grows downward instead of
-/// being rejected once it no longer fits a narrow row.
+/// PDF417's row bounds (ISO/IEC 15438): at least 3 rows, at most 90.
 const PDF417_MIN_ROWS: u32 = 3;
 const PDF417_MAX_ROWS: u32 = 90;
+
+/// The largest row count safe for `columns` columns at error level `ec`.
+///
+/// A PDF417 symbol carries its data-codeword count in a single codeword, so a
+/// symbol can address at most 928 data codewords. `rxing` derives the row count
+/// from the payload but guards only the *high-level* codeword count, so a large
+/// forced column count can make `columns * rows - ecCodewords` exceed 928 and it
+/// then indexes its 929-entry codeword table out of bounds — a panic, not an
+/// error. Bounding the rows to `(928 + ecCodewords) / columns` keeps the
+/// descriptor in range `(FR-2.6)`, so an oversized payload fails with a clean
+/// "cannot fit" error instead.
+fn pdf417_max_rows(columns: u32, ec: Pdf417Ec) -> u32 {
+    // Error-correction codewords double with each level: 2^(level + 1), so 2 at
+    // level 0 and 512 at level 8 (ISO/IEC 15438).
+    let ec_codewords = 1u32 << (u32::from(ec.get()) + 1);
+    ((928 + ec_codewords) / columns).clamp(PDF417_MIN_ROWS, PDF417_MAX_ROWS)
+}
 
 /// Encode `data` into a single PDF417 symbol as a neutral [`Symbol`].
 ///
@@ -290,7 +305,12 @@ fn pdf417_symbol(data: &[u8], ec: Pdf417Ec, columns: Option<u32>) -> Result<Symb
         encoder.setEncoding(Some(CharacterSet::UTF8));
     }
     if let Some(columns) = columns {
-        encoder.setDimensions(columns, columns, PDF417_MAX_ROWS, PDF417_MIN_ROWS);
+        encoder.setDimensions(
+            columns,
+            columns,
+            pdf417_max_rows(columns, ec),
+            PDF417_MIN_ROWS,
+        );
     }
     encoder
         .generateBarcodeLogicWithAutoECI(&text, u32::from(ec.get()), utf8_eci)
@@ -654,6 +674,73 @@ mod tests {
             !pdf417_codec(2, Some(1)).fits(&data),
             "one column is too narrow"
         );
+    }
+
+    #[test]
+    fn pdf417_max_rows_keeps_columns_times_rows_within_the_codeword_table() {
+        // The symbol's data-codeword count is `columns * rows - ecCodewords`; the
+        // symbol length descriptor it must fit is bounded by `928 + ecCodewords`
+        // total codewords, or rxing indexes its 929-entry table out of bounds.
+        for level in 0..=8u8 {
+            let ec_codewords = 1u32 << (u32::from(level) + 1);
+            for columns in 1..=30u32 {
+                let rows = pdf417_max_rows(columns, Pdf417Ec(level));
+                assert!(
+                    (PDF417_MIN_ROWS..=PDF417_MAX_ROWS).contains(&rows),
+                    "level={level} columns={columns}: rows {rows} out of range"
+                );
+                assert!(
+                    columns * rows <= 928 + ec_codewords,
+                    "level={level} columns={columns}: {} codewords overflow",
+                    columns * rows
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn pdf417_forced_columns_do_not_panic_on_a_payload_that_overran_the_table() {
+        // Regression: 1830 bytes at 20 columns made rxing index its codeword table
+        // out of bounds (index 932 into a 929-entry table) and panic. It must now
+        // be rejected cleanly, at the single-symbol level and through the split
+        // search (`encode`) that probes this size.
+        let data = vec![b'a'; 1830];
+        let codec = pdf417_codec(2, Some(20));
+        assert!(!codec.fits(&data), "20 columns cannot hold this payload");
+        assert!(matches!(codec.encode(&data), Err(AppError::Input(_))));
+
+        let codes = encode_multi(
+            &data,
+            &EncodeOptions::Pdf417 {
+                ec: Pdf417Ec(2),
+                columns: Some(20),
+            },
+            None,
+            None,
+        )
+        .expect("splits instead of panicking");
+        assert!(
+            codes.iter().all(|code| code.width() == 17 * 20 + 69),
+            "every code must use the forced columns"
+        );
+    }
+
+    #[test]
+    fn pdf417_forced_columns_never_panic_across_shapes() {
+        // Every column count must encode or fail cleanly across a range of sizes;
+        // a panic would fail the test.
+        for columns in 1..=30u32 {
+            for len in [400usize, 900, 1830, 2600] {
+                let data = vec![b'a'; len];
+                if let Ok(symbol) = pdf417_codec(2, Some(columns)).encode(&data) {
+                    assert_eq!(
+                        symbol.width(),
+                        17 * columns as usize + 69,
+                        "columns={columns} len={len}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

@@ -1128,6 +1128,22 @@ fn pdf417_columns_round_trip() {
 }
 
 #[test]
+fn pdf417_columns_and_chunk_split_round_trip() {
+    // Regression: combining a forced column count with chunked splitting once
+    // panicked inside the encoder while it searched for a symbol size. The
+    // rendered multi-symbol output must now decode back in order.
+    let payload = "混合 columns and chunk ".repeat(80);
+    let text = render(&["pdf417", "-c", "4", "-C", "8", &payload]);
+    let blocks = multi_blocks(&text);
+    assert!(blocks.len() >= 4, "expected at least four codes");
+    let mut assembled = String::new();
+    for block in &blocks {
+        assembled.push_str(&decode_pdf417(block, "half"));
+    }
+    assert_eq!(assembled, payload);
+}
+
+#[test]
 fn pdf417_split_round_trips_in_order() {
     // 4000 lowercase bytes exceed one symbol, so they are split and each block
     // must decode back to its own segment, in order.
