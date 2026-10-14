@@ -1170,3 +1170,58 @@ fn pdf417_max_bytes_split_round_trips_in_order() {
     }
     assert_eq!(assembled, payload);
 }
+
+#[test]
+fn pdf417_round_trips_at_every_error_level() {
+    for payload in ["hello", "https://example.com/abc", "参数 123"] {
+        for ec in 0..=8u8 {
+            let text = render(&["pdf417", "-e", &ec.to_string(), payload]);
+            assert_eq!(decode_pdf417(&text, "half"), payload, "ec={ec}");
+        }
+    }
+}
+
+#[test]
+fn pdf417_text_shapes_round_trip() {
+    // Each payload stresses a different compaction path: a long digit run
+    // (numeric), uppercase (text), punctuation/mixed, a single character, and a
+    // URL that mixes all of them.
+    for payload in [
+        "1234567890123456789012345678901234567890",
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+        "Mixed 123 !@#$%^&*()_+-=[]{}|;:'\",.<>/?",
+        "a",
+        "https://example.com/a/b?x=1&y=2#frag",
+    ] {
+        let text = render(&["pdf417", payload]);
+        assert_eq!(decode_pdf417(&text, "half"), payload, "payload={payload:?}");
+    }
+}
+
+#[test]
+fn pdf417_control_and_high_bytes_round_trip() {
+    // Every byte value — NUL, control codes and the whole high range — is not
+    // valid UTF-8, so it travels the Latin-1 path; it must come back unchanged.
+    let payload: Vec<u8> = (0u8..=255).collect();
+    let text = render_stdin(&["pdf417"], &payload);
+    let decoded: Vec<u8> = decode_pdf417(&text, "half")
+        .chars()
+        .map(|c| c as u8)
+        .collect();
+    assert_eq!(decoded, payload);
+}
+
+#[test]
+fn pdf417_columns_across_glyph_sets_round_trip() {
+    let payload = "columns and glyphs together";
+    for columns in ["1", "3", "12", "30"] {
+        for glyph in ["half", "quadrant", "braille"] {
+            let text = render(&["pdf417", "-C", columns, "--glyphs", glyph, payload]);
+            assert_eq!(
+                decode_pdf417(&text, glyph),
+                payload,
+                "columns={columns} glyph={glyph}"
+            );
+        }
+    }
+}

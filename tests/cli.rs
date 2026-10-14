@@ -388,6 +388,120 @@ fn pdf417_columns_reject_out_of_range_or_bad_values() {
     }
 }
 
+/// Run `qrtxt` with `args`, feeding `input` on standard input, and return stdout.
+fn stdin_with(args: &[&str], input: &str) -> String {
+    let output = qrtxt()
+        .args(args)
+        .write_stdin(input)
+        .output()
+        .expect("runs");
+    assert!(output.status.success(), "expected success: {output:?}");
+    String::from_utf8(output.stdout).expect("utf-8 output")
+}
+
+#[test]
+fn pdf417_reads_a_file_like_a_literal() {
+    let path = std::env::temp_dir().join(format!("qrtxt-pdf417-{}.txt", std::process::id()));
+    std::fs::write(&path, "hello pdf").unwrap();
+    let from_file = stdout(&["pdf417", "--file", path.to_str().unwrap()]);
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(from_file, stdout(&["pdf417", "hello pdf"]));
+}
+
+#[test]
+fn pdf417_reads_stdin_like_a_literal() {
+    assert_eq!(
+        stdin_with(&["pdf417"], "hello pdf"),
+        stdout(&["pdf417", "hello pdf"])
+    );
+}
+
+#[test]
+fn pdf417_preserve_newline_changes_output() {
+    assert_ne!(
+        stdin_with(&["pdf417", "--preserve-newline"], "hi\n"),
+        stdin_with(&["pdf417"], "hi\n")
+    );
+}
+
+#[test]
+fn pdf417_render_modes_emit_a_symbol() {
+    // text draws block glyphs; ansi draws the same grid with escape codes.
+    assert!(
+        stdout(&["pdf417", "--mode", "text", "hello"])
+            .chars()
+            .any(is_block)
+    );
+    let ansi = stdout(&["pdf417", "--mode", "ansi", "hello"]);
+    assert!(ansi.contains("\x1b["), "{ansi:?}");
+    assert!(!ansi.trim().is_empty());
+}
+
+#[test]
+fn pdf417_glyph_sets_emit_output() {
+    for glyph in ["half", "quadrant", "braille"] {
+        let text = stdout(&["pdf417", "--mode", "text", "--glyphs", glyph, "hello"]);
+        assert!(!text.trim().is_empty(), "glyph={glyph}");
+    }
+}
+
+#[test]
+fn pdf417_border_and_invert_change_output() {
+    let base = stdout(&["pdf417", "--mode", "text", "hello"]);
+    let no_border = stdout(&["pdf417", "--mode", "text", "-b", "0", "hello"]);
+    assert!(no_border.lines().count() < base.lines().count());
+    assert_ne!(
+        stdout(&["pdf417", "--mode", "text", "--invert", "hello"]),
+        base
+    );
+}
+
+#[test]
+fn pdf417_accepts_the_extreme_error_levels() {
+    for level in ["0", "8"] {
+        assert!(
+            stdout(&["pdf417", "-e", level, "hello"])
+                .chars()
+                .any(is_block),
+            "level={level}"
+        );
+    }
+}
+
+#[test]
+fn pdf417_max_bytes_and_chunk_drive_the_captions() {
+    let payload = "a".repeat(600);
+    let capped = stdout(&["pdf417", "--max-bytes", "100", &payload]);
+    assert!(capped.contains("PDF417 1/6"), "{capped}");
+    assert!(capped.contains("PDF417 6/6"), "{capped}");
+    let chunked = stdout(&["pdf417", "-c", "5", &payload]);
+    assert!(chunked.contains("PDF417 5/5"), "{chunked}");
+}
+
+#[test]
+fn pdf417_combines_every_option_without_conflict() {
+    let text = stdout(&[
+        "pdf417",
+        "-e",
+        "5",
+        "-C",
+        "6",
+        "-c",
+        "3",
+        "--max-bytes",
+        "40",
+        "-i",
+        "--glyphs",
+        "braille",
+        "--mode",
+        "text",
+        "-b",
+        "2",
+        "combine every option 混合",
+    ]);
+    assert!(text.contains("PDF417 3/3"), "{text}");
+}
+
 #[test]
 fn removed_format_flag_is_rejected() {
     // The flat `--format` selector is gone; the subcommand chooses the format.

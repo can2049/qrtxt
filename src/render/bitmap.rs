@@ -199,4 +199,20 @@ mod tests {
         let text = String::from_utf8(out).unwrap();
         assert!(text.contains("#0;2;0;0;0#1;2;100;100;100"), "{text:?}");
     }
+
+    #[test]
+    fn module_bitmap_keeps_rectangular_modules_square() {
+        // A wide, short symbol (as PDF417 produces) must scale to square modules
+        // with its quiet zone, not be squashed into a square image.
+        let symbol = Symbol::new(30, 4, vec![true; 30 * 4]);
+        let bitmap = module_bitmap(&symbol, 2);
+        let (side_w, side_h) = (30 + 2 * 2, 4 + 2 * 2);
+        let module_px = bitmap.width_px / side_w;
+        assert!((MIN_MODULE_PX..=MAX_MODULE_PX).contains(&module_px));
+        assert_eq!(bitmap.width_px, side_w * module_px);
+        assert_eq!(bitmap.height_px, side_h * module_px);
+        // Only the symbol interior is dark: 30 * 4 modules, each `module_px^2`.
+        let dark = bitmap.dark.iter().filter(|dark| **dark).count();
+        assert_eq!(dark, 30 * 4 * module_px * module_px);
+    }
 }
