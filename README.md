@@ -8,8 +8,8 @@ Turn text into a QR code, right in your terminal.
 [![crates.io](https://img.shields.io/crates/v/qrtxt.svg)](https://crates.io/crates/qrtxt)
 
 `qrtxt` reads a string, a file, or piped input and prints an ordinary QR code.
-The `datamatrix` subcommand prints a Data Matrix (ECC 200) symbol and `pdf417` a
-stacked PDF417 symbol instead. By
+The `datamatrix` subcommand prints a Data Matrix (ECC 200) symbol, `pdf417` a
+stacked PDF417 symbol, and `aztec` an Aztec Code symbol instead. By
 default it picks the best rendering your terminal offers — a crisp bitmap over
 the Kitty or Sixel graphics protocol where supported, otherwise Unicode block
 characters, so a plain UTF-8 terminal always works.
@@ -37,13 +37,14 @@ quiet zone shows as blank space in this color-free transcript.)
 ## Features
 
 - **Three input modes** — a literal argument, a file (`--file`), or standard input.
-- **Three barcode formats** — one subcommand each: `qr` (an ordinary QR code),
-  `datamatrix` (a Data Matrix (ECC 200) symbol), and `pdf417` (a stacked PDF417
-  symbol).
+- **Four barcode formats** — one subcommand each: `qr` (an ordinary QR code),
+  `datamatrix` (a Data Matrix (ECC 200) symbol), `pdf417` (a stacked PDF417
+  symbol), and `aztec` (an Aztec Code symbol).
 - **Per-format error correction** — the `qr` subcommand takes `L`, `M`, `Q`, or
-  `H` (never silently boosted) and `pdf417` its numeric levels `0`–`8`; a Data
-  Matrix's correction is fixed by its symbol size, so `datamatrix` has no such
-  option.
+  `H` (never silently boosted), `pdf417` its numeric levels `0`–`8`, and `aztec`
+  a percentage `0`–`100`; a Data Matrix's correction is fixed by its symbol size,
+  so `datamatrix` has no such option. `aztec` also takes `--layers` to pin the
+  symbol shape.
 - **Five render modes** — `--mode auto` (default) picks the best rendering the
   terminal offers: a crisp bitmap over the Kitty or Sixel graphics protocol where
   supported, otherwise Unicode block glyphs. Force a specific one with `text`,
@@ -96,14 +97,15 @@ Commands:
   qr          Encode a QR code
   datamatrix  Encode a Data Matrix (ECC 200) symbol [alias: dm]
   pdf417      Encode a PDF417 symbol [alias: pdf]
+  aztec       Encode an Aztec Code symbol [alias: az]
   help        Print this message or the help of the given subcommand(s)
 
 Options:
   -h, --help     Print help (see a summary with '-h')
   -V, --version  Print version
 
-The options below are shared by every subcommand; `qr` and `pdf417` each add
-their own -e/--error-correction.
+The options below are shared by every subcommand; `qr`, `pdf417`, and `aztec`
+each add their own -e/--error-correction.
 
 Payload:
   -f, --file <PATH>       Read the payload from a file
@@ -113,7 +115,9 @@ Payload:
 Encoding:
   -e, --error-correction <LEVEL>  (qr) Error-correction level: L (about 7% recoverable), M (15%), Q (25%), or H (30%) [default: L]
                                   (pdf417) Error-correction level: 0 (least redundancy) to 8 (most) [default: 2]
+                                  (aztec) Error-correction percentage: 0 (least redundancy) to 100 (most) [default: 33]
       --columns <N>               (pdf417) Force the data-column count (1-30); fewer columns make a narrower, taller symbol [short: -C, alias: --cl]
+  -l, --layers <N>                (aztec) Force the layer count: positive (1-32) full-range, negative (-4 to -1) compact
   -m, --max-bytes <BYTES>         Cap the payload of each symbol at BYTES bytes; implies splitting (default: the symbol's own limit)
   -c, --chunk <COUNT>             Split the payload across at least COUNT symbols; advisory (default: no minimum)
 
@@ -130,8 +134,9 @@ Source: https://github.com/can2049/qrtxt
 
 A bare invocation with no subcommand is treated as `qr`, so `qrtxt "hi"` and
 `cat token.txt | qrtxt` keep working. Run `qrtxt --help` for the command list,
-`qrtxt qr --help`, `qrtxt datamatrix --help`, or `qrtxt pdf417 --help` for the
-per-format options, and `qrtxt qr -h` for the short summary.
+`qrtxt qr --help`, `qrtxt datamatrix --help`, `qrtxt pdf417 --help`, or
+`qrtxt aztec --help` for the per-format options, and `qrtxt qr -h` for the short
+summary.
 
 ## Examples
 
@@ -162,6 +167,15 @@ qrtxt pdf417 -C 1 "https://example.com"
 
 # the same, packed into half the cells
 qrtxt pdf417 --cl 1 --mode text --glyphs braille "https://example.com"
+
+# an Aztec Code symbol
+qrtxt aztec "https://example.com"
+
+# an Aztec Code with more error correction and a fixed layer count
+qrtxt aztec --error-correction 60 --layers 5 "important payload"
+
+# a compact Aztec Code (negative layer count)
+qrtxt aztec --layers -3 "https://example.com"
 
 # a crisp black-and-white bitmap (needs a Kitty-protocol terminal)
 qrtxt qr --mode kitty "https://example.com"
