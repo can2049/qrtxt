@@ -193,6 +193,8 @@ pub enum Mode {
     Text,
     /// ANSI escape-code text rendering.
     Ansi,
+    /// Force a bitmap, picking Kitty or Sixel by what the terminal supports.
+    Bitmap,
     /// Bitmap via the Kitty graphics protocol.
     Kitty,
     /// Bitmap via the Sixel graphics protocol.
@@ -208,10 +210,11 @@ impl FromStr for Mode {
             "auto" => Ok(Mode::Auto),
             "text" => Ok(Mode::Text),
             "ansi" => Ok(Mode::Ansi),
+            "bitmap" => Ok(Mode::Bitmap),
             "kitty" => Ok(Mode::Kitty),
             "sixel" => Ok(Mode::Sixel),
             _ => Err(format!(
-                "invalid mode: {s} (expected auto|text|ansi|kitty|sixel)"
+                "invalid mode: {s} (expected auto|text|ansi|bitmap|kitty|sixel)"
             )),
         }
     }
@@ -404,6 +407,7 @@ mod tests {
         assert_eq!("auto".parse::<Mode>(), Ok(Mode::Auto));
         assert_eq!("Text".parse::<Mode>(), Ok(Mode::Text));
         assert_eq!("ANSI".parse::<Mode>(), Ok(Mode::Ansi));
+        assert_eq!("BitMap".parse::<Mode>(), Ok(Mode::Bitmap));
         assert_eq!("kitty".parse::<Mode>(), Ok(Mode::Kitty));
         assert_eq!("Sixel".parse::<Mode>(), Ok(Mode::Sixel));
     }

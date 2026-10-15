@@ -45,10 +45,11 @@ quiet zone shows as blank space in this color-free transcript.)
   a percentage `0`–`100`; a Data Matrix's correction is fixed by its symbol size,
   so `datamatrix` has no such option. `aztec` also takes `--layers` to pin the
   symbol shape.
-- **Five render modes** — `--mode auto` (default) picks the best rendering the
+- **Six render modes** — `--mode auto` (default) picks the best rendering the
   terminal offers: a crisp bitmap over the Kitty or Sixel graphics protocol where
-  supported, otherwise Unicode block glyphs. Force a specific one with `text`,
-  `ansi`, `kitty`, or `sixel`. A bitmap is smaller and crisper than block glyphs;
+  supported, otherwise Unicode block glyphs. Force one with `text`, `ansi`,
+  `bitmap`, `kitty`, or `sixel`; `bitmap` forces an image and picks Kitty or Sixel
+  by what the terminal supports. A bitmap is smaller and crisper than block glyphs;
   `ansi` covers terminals without block glyphs; an unsupported bitmap mode fails
   fast instead of printing garbage.
 - **Three glyph sets** — half blocks (default), quadrants, braille — trading
@@ -91,7 +92,10 @@ Requires Rust 1.85 or newer.
 ## Usage
 
 ```text
-qrtxt <COMMAND> [OPTIONS] [DATA]
+$ qrtxt -h
+Turn text into a terminal QR code, Data Matrix, PDF417, or Aztec Code
+
+Usage: qrtxt [COMMAND] [OPTIONS] [DATA]
 
 Commands:
   qr          Encode a QR code
@@ -101,11 +105,8 @@ Commands:
   help        Print this message or the help of the given subcommand(s)
 
 Options:
-  -h, --help     Print help (see a summary with '-h')
+  -h, --help     Print help (see more with '--help')
   -V, --version  Print version
-
-The options below are shared by every subcommand; `qr`, `pdf417`, and `aztec`
-each add their own -e/--error-correction.
 
 Payload:
   -f, --file <PATH>       Read the payload from a file
@@ -113,30 +114,38 @@ Payload:
   [DATA]                  Literal payload to encode
 
 Encoding:
-  -e, --error-correction <LEVEL>  (qr) Error-correction level: L (about 7% recoverable), M (15%), Q (25%), or H (30%) [default: L]
-                                  (pdf417) Error-correction level: 0 (least redundancy) to 8 (most) [default: 2]
-                                  (aztec) Error-correction percentage: 0 (least redundancy) to 100 (most) [default: 33]
-      --columns <N>               (pdf417) Force the data-column count (1-30); fewer columns make a narrower, taller symbol [short: -C, alias: --cl]
-  -l, --layers <N>                (aztec) Force the layer count: positive (1-32) full-range, negative (-4 to -1) compact
-  -m, --max-bytes <BYTES>         Cap the payload of each symbol at BYTES bytes; implies splitting (default: the symbol's own limit)
-  -c, --chunk <COUNT>             Split the payload across at least COUNT symbols; advisory (default: no minimum)
+  -m, --max-bytes <BYTES>  Cap the payload of each symbol at BYTES bytes; implies splitting (default: the symbol's own limit)
+  -c, --chunk <COUNT>      Split the payload across at least COUNT symbols; advisory (default: no minimum)
 
 Rendering:
-  -M, --mode <MODE>      How to draw the code: auto, text, ansi, kitty, or sixel [default: auto]
+  -M, --mode <MODE>      How to draw the code [default: auto] [possible values: auto, text, ansi, bitmap, kitty, sixel]
   -b, --border <BORDER>  Quiet-zone width in modules; 0 removes the margin [default: 4]
-  -i, --invert           Invert the colors: draw a light-on-dark code
+  -i, --invert           Invert the colors: draw a light-on-dark code instead of dark-on-light
 
 Text rendering:
-  -g, --glyphs <SET>  Glyph set used to pack modules into character cells: half (h; 1x2 modules per cell, most robust), quadrant (q; 2x2), or braille (b; 2x4, densest) [default: half]
+  -g, --glyphs <SET>  Glyph set used to pack modules into character cells [default: half] [possible values: half, quadrant, braille]
+
+With no COMMAND a QR code is produced, so `qrtxt DATA` and `qrtxt qr DATA` do the same. Options are written after the command.
+
+Examples:
+  qrtxt "https://example.com"   A QR code (the default)
+  cat token.txt | qrtxt         Encode piped input
+  qrtxt datamatrix "hi"         A Data Matrix symbol
+  qrtxt pdf417 -C 1 "hi"        A narrow, tall PDF417
+  qrtxt aztec --layers -3 "hi"  A compact Aztec Code
+  qrtxt --mode text "hi"        Force Unicode block glyphs
+  qrtxt --mode bitmap "hi"      Force a bitmap (Kitty or Sixel)
 
 Source: https://github.com/can2049/qrtxt
 ```
 
 A bare invocation with no subcommand is treated as `qr`, so `qrtxt "hi"` and
-`cat token.txt | qrtxt` keep working. Run `qrtxt --help` for the command list,
+`cat token.txt | qrtxt` keep working. The shared options are listed under both
+`qrtxt -h` and every subcommand; `-e/--error-correction` is per-format (`qr` takes
+`L`/`M`/`Q`/`H`, `pdf417` takes `0`–`8`, `aztec` a percentage `0`–`100`), so run
 `qrtxt qr --help`, `qrtxt datamatrix --help`, `qrtxt pdf417 --help`, or
-`qrtxt aztec --help` for the per-format options, and `qrtxt qr -h` for the short
-summary.
+`qrtxt aztec --help` for the options of one symbology, and `qrtxt qr -h` for the
+short summary.
 
 ## Examples
 
@@ -183,6 +192,9 @@ qrtxt qr --mode kitty "https://example.com"
 # a crisp black-and-white bitmap (needs a Sixel-protocol terminal)
 qrtxt qr --mode sixel "https://example.com"
 
+# a bitmap, whichever of Kitty or Sixel the terminal supports
+qrtxt qr --mode bitmap "https://example.com"
+
 # force Unicode block glyphs (for a pipe, or to compare against a bitmap)
 qrtxt qr --mode text "hello"
 
@@ -218,6 +230,7 @@ is drawn. Every format renders through every mode.
 | `qr` (default) | An ordinary QR code. `--error-correction` takes `L`/`M`/`Q`/`H`. |
 | `datamatrix` (`dm`) | A Data Matrix (ECC 200) symbol, always square. |
 | `pdf417` (`pdf`) | A stacked PDF417 symbol. `--error-correction` takes `0`–`8`. |
+| `aztec` (`az`) | An Aztec Code symbol. `--error-correction` takes `0`–`100`; `--layers` pins the shape. |
 
 A bare invocation with no subcommand is treated as `qr`, so `qrtxt "hi"` and
 `cat token.txt | qrtxt` keep working. A Data Matrix's error correction is fixed
@@ -253,14 +266,16 @@ cell and roughly halves the printed width.
 | `auto` (default) | — | A bitmap when the terminal supports one, otherwise Unicode block glyphs. |
 | `text` | characters | Unicode block glyphs (the glyph set applies). |
 | `ansi` | characters | Black-on-white escape codes; wider, for terminals without block glyphs. |
+| `bitmap` | bitmap | A bitmap via whichever of Kitty or Sixel the terminal supports. |
 | `kitty` | bitmap | A black-and-white bitmap via the Kitty graphics protocol. |
 | `sixel` | bitmap | The same bitmap via the Sixel graphics protocol. |
 
 A bitmap is smaller and crisper than block glyphs, so `auto` prefers it — but only
 where it makes sense. `auto` **never** emits a bitmap when standard output is not
 a terminal, so `qrtxt ... > code.txt` or `qrtxt ... | head` always produces text.
-`--mode kitty` and `--mode sixel` force a protocol and fail with a usage error
-(exit code 2) when the terminal cannot draw it.
+`--mode bitmap` forces a bitmap and picks Kitty or Sixel by terminal support;
+`--mode kitty` and `--mode sixel` force one protocol. All three fail with a usage
+error (exit code 2) when the terminal cannot draw it.
 
 `--glyphs` applies to `text` only; `--invert` applies to every mode (in a bitmap
 it swaps the two colours). `--help` probes the current terminal once and appends
@@ -303,8 +318,9 @@ render. The output is pure black and white and carries its own white quiet zone,
 so `--invert` swaps the two colours while the code stays self-contained; the
 glyph set is ignored.
 
-`auto` uses the same probe to prefer Kitty over Sixel, and the `--help` probe
-appends to the `--mode` entry what `auto` will pick for the current terminal.
+`auto` and `bitmap` use the same probe to prefer Kitty over Sixel, and the
+`--help` probe appends to the `--mode` entry what `auto` will pick for the current
+terminal.
 
 ## Sixel graphics protocol
 

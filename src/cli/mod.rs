@@ -22,6 +22,7 @@ use crate::types::{
 mod help;
 mod parse;
 mod probe;
+mod value;
 
 pub use help::{add_mode_hint, mode_support_hint};
 pub use parse::parse;
@@ -44,7 +45,18 @@ A payload too large for a single symbol is split automatically across several ba
 symbols, printed in order under a `QR Code i/N` (or `Data Matrix i/N`, `PDF417 i/N`, \
 `Aztec i/N`) caption. \
 Use --max-bytes to cap the bytes per symbol, or --chunk to require a minimum number of symbols.",
-    after_help = "Source: https://github.com/can2049/qrtxt"
+    override_usage = "qrtxt [COMMAND] [OPTIONS] [DATA]",
+    after_help = "With no COMMAND a QR code is produced, so `qrtxt DATA` and `qrtxt qr DATA` do \
+the same. Options are written after the command.\n\n\
+Examples:\n  \
+qrtxt \"https://example.com\"   A QR code (the default)\n  \
+cat token.txt | qrtxt         Encode piped input\n  \
+qrtxt datamatrix \"hi\"         A Data Matrix symbol\n  \
+qrtxt pdf417 -C 1 \"hi\"        A narrow, tall PDF417\n  \
+qrtxt aztec --layers -3 \"hi\"  A compact Aztec Code\n  \
+qrtxt --mode text \"hi\"        Force Unicode block glyphs\n  \
+qrtxt --mode bitmap \"hi\"      Force a bitmap (Kitty or Sixel)\n\n\
+Source: https://github.com/can2049/qrtxt"
 )]
 pub struct Cli {
     /// The options shared by every subcommand, also listed in the top-level help.
@@ -65,15 +77,36 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Encode a QR code.
+    #[command(after_help = "Examples:\n  \
+qrtxt qr \"https://example.com\"\n  \
+qrtxt qr --error-correction H \"important payload\"\n  \
+qrtxt qr --mode text --glyphs braille \"a narrow terminal\"")]
     Qr(QrArgs),
     /// Encode a Data Matrix (ECC 200) symbol.
-    #[command(visible_alias = "dm")]
+    #[command(
+        visible_alias = "dm",
+        after_help = "Examples:\n  \
+qrtxt datamatrix \"https://example.com\"\n  \
+qrtxt datamatrix --mode text --glyphs quadrant --file payload.txt"
+    )]
     Datamatrix(DatamatrixArgs),
     /// Encode a PDF417 symbol.
-    #[command(visible_alias = "pdf")]
+    #[command(
+        visible_alias = "pdf",
+        after_help = "Examples:\n  \
+qrtxt pdf417 \"https://example.com\"\n  \
+qrtxt pdf417 --error-correction 6 \"important payload\"\n  \
+qrtxt pdf417 --columns 1 \"fit a narrow terminal\""
+    )]
     Pdf417(Pdf417Args),
     /// Encode an Aztec Code symbol.
-    #[command(visible_alias = "az")]
+    #[command(
+        visible_alias = "az",
+        after_help = "Examples:\n  \
+qrtxt aztec \"https://example.com\"\n  \
+qrtxt aztec --error-correction 60 --layers 5 \"important payload\"\n  \
+qrtxt aztec --layers -3 \"a compact symbol\""
+    )]
     Aztec(AztecArgs),
 }
 
@@ -148,19 +181,21 @@ struct CommonArgs {
     )]
     chunk: Option<u32>,
 
-    /// How to draw the code: auto, text, ansi, kitty, or sixel.
+    /// How to draw the code.
     ///
     /// `auto` (the default) uses a bitmap when the terminal supports one — it is
     /// smaller and crisper than block characters — and falls back to Unicode block
     /// glyphs otherwise. It never emits a bitmap when standard output is not a
-    /// terminal, so piping or redirecting always yields text. `text` draws Unicode
-    /// block glyphs (honouring --glyphs); `ansi` draws black-on-white escape codes;
-    /// `kitty` and `sixel` force that bitmap protocol and fail with a usage error
-    /// if the terminal does not support it.
+    /// terminal, so piping or redirecting always yields text. `text` and `ansi`
+    /// draw the code with characters; `bitmap` forces a bitmap, picking Kitty or
+    /// Sixel by what the terminal supports; `kitty` and `sixel` force that one
+    /// protocol. A forced bitmap fails with a usage error when the terminal cannot
+    /// draw it.
     #[arg(
         short = 'M',
         long = "mode",
         value_name = "MODE",
+        value_enum,
         default_value = "auto",
         global = true,
         help_heading = "Rendering"
@@ -194,8 +229,7 @@ struct CommonArgs {
     )]
     invert: bool,
 
-    /// Glyph set used to pack modules into character cells: half (h; 1x2 modules
-    /// per cell, most robust), quadrant (q; 2x2), or braille (b; 2x4, densest).
+    /// Glyph set used to pack modules into character cells.
     ///
     /// Each set also accepts its initial letter (e.g. `-g b`). Braille needs a font
     /// that renders dots tightly. Only used by `--mode text`; the bitmap and ANSI
@@ -204,6 +238,7 @@ struct CommonArgs {
         short = 'g',
         long = "glyphs",
         value_name = "SET",
+        value_enum,
         default_value = "half",
         global = true,
         help_heading = "Text rendering"
@@ -244,8 +279,7 @@ struct QrArgs {
     #[command(flatten)]
     common: CommonArgs,
 
-    /// Error-correction level: L (about 7% recoverable), M (15%), Q (25%), or H
-    /// (30%).
+    /// Error-correction level.
     ///
     /// A higher level recovers from more damage but holds less data, which can
     /// force the symbol to a larger version. The level is never boosted
@@ -254,6 +288,7 @@ struct QrArgs {
         short = 'e',
         long = "error-correction",
         value_name = "LEVEL",
+        value_enum,
         default_value = "L",
         help_heading = "Encoding"
     )]
@@ -409,7 +444,9 @@ pub fn run_with(cli: &Cli) -> Result<(), AppError> {
 ///
 /// `auto` picks a bitmap only when standard output is a terminal and a protocol
 /// is supported (Kitty preferred, then Sixel); otherwise it stays text — a
-/// redirected or piped run is never handed bitmap escape bytes.
+/// redirected or piped run is never handed bitmap escape bytes. `bitmap` also
+/// prefers Kitty, then Sixel, but insists on one: with no terminal or neither
+/// protocol it fails with a usage error instead of falling back to text.
 fn resolve_mode(mode: Mode) -> Result<RenderMode, AppError> {
     match mode {
         Mode::Auto => match probe::probe_for_auto()? {
@@ -419,6 +456,18 @@ fn resolve_mode(mode: Mode) -> Result<RenderMode, AppError> {
         },
         Mode::Text => Ok(RenderMode::Compact),
         Mode::Ansi => Ok(RenderMode::Ansi),
+        Mode::Bitmap => match probe::probe_for_auto()? {
+            Some(caps) if caps.kitty => Ok(RenderMode::Kitty),
+            Some(caps) if caps.sixel => Ok(RenderMode::Sixel),
+            Some(_) => Err(AppError::Usage(
+                "bitmap: this terminal supports neither the Kitty nor the Sixel graphics \
+                 protocol (try --mode text)"
+                    .to_string(),
+            )),
+            None => Err(AppError::Usage(
+                "bitmap: standard output is not a terminal".to_string(),
+            )),
+        },
         Mode::Kitty => {
             probe::ensure_kitty_supported()?;
             Ok(RenderMode::Kitty)
@@ -650,6 +699,13 @@ mod tests {
         assert_eq!(parse(&["qr", "--mode", "kitty", "x"]).mode(), Mode::Kitty);
         assert_eq!(parse(&["qr", "-M", "kitty", "x"]).mode(), Mode::Kitty);
         assert_ne!(parse(&["qr", "x"]).mode(), Mode::Kitty);
+    }
+
+    #[test]
+    fn mode_flag_selects_bitmap() {
+        assert_eq!(parse(&["qr", "--mode", "bitmap", "x"]).mode(), Mode::Bitmap);
+        assert_eq!(parse(&["qr", "-M", "bitmap", "x"]).mode(), Mode::Bitmap);
+        assert_ne!(parse(&["qr", "x"]).mode(), Mode::Bitmap);
     }
 
     #[test]

@@ -37,10 +37,11 @@ $ qrtxt "hi"
 - **三种输入方式** —— 位置参数字面量、文件(`--file`)、标准输入。
 - **四种条码格式** —— 各对应一个子命令:`qr`(普通二维码)、`datamatrix`(Data Matrix(ECC 200)符号)、`pdf417`(堆叠式 PDF417 符号)与 `aztec`(Aztec Code 符号)。
 - **按格式区分的纠错** —— `qr` 取 `L`、`M`、`Q`、`H`(不做自动升档),`pdf417` 取其数字等级 `0`–`8`,`aztec` 取百分比 `0`–`100`;Data Matrix 的纠错由符号尺寸固定,因此 `datamatrix` 没有该选项。`aztec` 还可用 `--layers` 固定符号形状。
-- **五种渲染模式** —— `--mode auto`(默认)挑选终端的最佳渲染方式:支持时用
+- **六种渲染模式** —— `--mode auto`(默认)挑选终端的最佳渲染方式:支持时用
   Kitty/Sixel 图形协议绘制清晰位图,否则回退到 Unicode 块字符;也可用 `text`、
-  `ansi`、`kitty`、`sixel` 强制指定。位图比块字符更小更清晰,`ansi` 覆盖不支持块
-  字符的终端,不受支持的位图模式会快速报错而不是打印乱码。
+  `ansi`、`bitmap`、`kitty`、`sixel` 强制指定。`bitmap` 强制位图并依据终端支持
+  在 Kitty/Sixel 中择优。位图比块字符更小更清晰,`ansi` 覆盖不支持块字符的终端,
+  不受支持的位图模式会快速报错而不是打印乱码。
 - **三种字形集** —— 半块(默认)、象限块、盲文点阵,在可扫性与屏幕密度之间取舍
   (仅用于 `--mode text`)。
 - **任意终端都可读** —— 字符渲染器显式设置颜色,把深色模块打印成白底黑字(静默区为白色),
@@ -77,7 +78,10 @@ cargo install --path .
 ## 用法
 
 ```text
-qrtxt <COMMAND> [OPTIONS] [DATA]
+$ qrtxt -h
+在终端把文字变成二维码:QR 码、Data Matrix、PDF417 或 Aztec Code。
+
+Usage: qrtxt [COMMAND] [OPTIONS] [DATA]
 
 命令:
   qr          生成普通二维码
@@ -90,36 +94,42 @@ qrtxt <COMMAND> [OPTIONS] [DATA]
   -h, --help     打印帮助(用 '--help' 查看更详细说明)
   -V, --version  打印版本
 
-下列选项为所有子命令共享;`qr`、`pdf417` 与 `aztec` 各自额外提供 -e/--error-correction。
-
 输入:
   -f, --file <PATH>       从文件读取 payload
   -p, --preserve-newline  保留文件/管道输入尾部的一个换行
-  [DATA]                  字面量 payload;省略时从 --file 或 stdin 读取
+  [DATA]                  字面量 payload
 
 编码:
-  -e, --error-correction <LEVEL>  (qr) 纠错等级: L(约可恢复 7%)、M(15%)、Q(25%)、H(30%) [默认: L]
-                                  (pdf417) 纠错等级: 0(冗余最少)到 8(最多) [默认: 2]
-                                  (aztec) 纠错百分比: 0(冗余最少)到 100(最多) [默认: 33]
-      --columns <N>               (pdf417) 强制数据列数(1-30);列数越少,符号越窄越高 [短: -C,别名: --cl]
-  -l, --layers <N>                (aztec) 强制层数: 正数(1-32)为全尺寸层,负数(-4 到 -1)为紧凑层
-  -m, --max-bytes <BYTES>         限制每个符号的负载为 BYTES 字节;会触发拆分(默认: 单个符号自身的上限)
-  -c, --chunk <COUNT>             把负载拆分成至少 COUNT 个符号;引导性(默认: 无下限)
+  -m, --max-bytes <BYTES>  限制每个符号的负载为 BYTES 字节;会触发拆分(默认: 单个符号自身的上限)
+  -c, --chunk <COUNT>      把负载拆分成至少 COUNT 个符号;引导性(默认: 无下限)
 
 渲染:
-  -M, --mode <MODE>      绘制方式: auto、text、ansi、kitty 或 sixel [默认: auto]
+  -M, --mode <MODE>      绘制方式 [默认: auto] [可选值: auto, text, ansi, bitmap, kitty, sixel]
   -b, --border <BORDER>  静默区宽度(模块数);0 表示去掉留白 [默认: 4]
   -i, --invert           反转颜色:绘制浅底深字的反相二维码
 
 文本渲染:
-  -g, --glyphs <SET>  字形集,决定每个字符格打包多少模块: half (h;1x2 模块/格,最稳)、quadrant (q;2x2)、braille (b;2x4,最密) [默认: half]
+  -g, --glyphs <SET>  字形集,决定每个字符格打包多少模块 [默认: half] [可选值: half, quadrant, braille]
+
+不带 COMMAND 时生成 QR 码,即 `qrtxt DATA` 等价于 `qrtxt qr DATA`。选项写在子命令之后。
+
+示例:
+  qrtxt "https://example.com"   QR 码(默认)
+  cat token.txt | qrtxt         编码管道输入
+  qrtxt datamatrix "hi"         Data Matrix 符号
+  qrtxt pdf417 -C 1 "hi"        窄而高的 PDF417
+  qrtxt aztec --layers -3 "hi"  紧凑型 Aztec Code
+  qrtxt --mode text "hi"        强制使用 Unicode 块字符
+  qrtxt --mode bitmap "hi"      强制位图(Kitty 或 Sixel)
 
 Source: https://github.com/can2049/qrtxt
 ```
 
 不带子命令时按 `qr` 处理,因此 `qrtxt "hi"` 与 `cat token.txt | qrtxt` 依旧可用。
-运行 `qrtxt --help` 查看命令列表,`qrtxt qr --help`、`qrtxt datamatrix --help`、
-`qrtxt pdf417 --help` 或 `qrtxt aztec --help` 查看各格式的选项,`qrtxt qr -h` 查看简要摘要。
+共享选项在 `qrtxt -h` 与各子命令下都会列出;`-e/--error-correction` 按格式区分
+(`qr` 取 `L`/`M`/`Q`/`H`,`pdf417` 取 `0`–`8`,`aztec` 取百分比 `0`–`100`),
+运行 `qrtxt qr --help`、`qrtxt datamatrix --help`、`qrtxt pdf417 --help` 或
+`qrtxt aztec --help` 查看对应格式的选项,`qrtxt qr -h` 查看简要摘要。
 
 ## 示例
 
@@ -166,6 +176,9 @@ qrtxt qr --mode kitty "https://example.com"
 # 清晰的黑白位图(需要支持 Sixel 协议的终端)
 qrtxt qr --mode sixel "https://example.com"
 
+# 位图:终端支持哪种就用哪种(Kitty 或 Sixel)
+qrtxt qr --mode bitmap "https://example.com"
+
 # 强制使用 Unicode 块字符(用于管道,或与位图对照)
 qrtxt qr --mode text "hello"
 
@@ -200,6 +213,7 @@ qrtxt qr --chunk 4 "a-short-but-verifiable-payload"
 | `qr`(默认) | 普通二维码;`--error-correction` 取 `L`/`M`/`Q`/`H`。 |
 | `datamatrix`(`dm`) | Data Matrix(ECC 200)符号,始终为正方形。 |
 | `pdf417`(`pdf`) | 堆叠式 PDF417 符号;`--error-correction` 取 `0`–`8`。 |
+| `aztec`(`az`) | Aztec Code 符号;`--error-correction` 取 `0`–`100`,`--layers` 固定形状。 |
 
 不带子命令时按 `qr` 处理,因此 `qrtxt "hi"` 与 `cat token.txt | qrtxt` 依旧可用。
 Data Matrix 的纠错由符号尺寸固定,因此 `datamatrix` 没有任何编码选项,并会拒绝
@@ -227,13 +241,15 @@ PDF417 符号是一摞行,宽度与高度此消彼长:默认由编码器挑一�
 | `auto`(默认) | — | 终端支持时用位图,否则用 Unicode 块字符。 |
 | `text` | 字符 | Unicode 块字符(字形集生效)。 |
 | `ansi` | 字符 | 白底黑字的转义序列;更宽,用于不支持块字符的终端。 |
+| `bitmap` | 位图 | 终端支持哪种协议就用哪种(Kitty 或 Sixel)绘制位图。 |
 | `kitty` | 位图 | 通过 Kitty 图形协议绘制黑白位图。 |
 | `sixel` | 位图 | 通过 Sixel 图形协议绘制同样的位图。 |
 
 位图比块字符更小更清晰,因此 `auto` 优先使用它——但仅在合适的时候。标准输出不是
 终端时 `auto` **绝不**输出位图,所以 `qrtxt ... > code.txt` 或 `qrtxt ... | head`
-始终得到文本。`--mode kitty` 与 `--mode sixel` 强制使用对应协议,终端画不出来时
-以用法错误(退出码 2)退出。
+始终得到文本。`--mode bitmap` 强制位图,并依据终端支持在 Kitty/Sixel 中择优;
+`--mode kitty` 与 `--mode sixel` 强制使用对应协议。三者在终端画不出来时都以用法
+错误(退出码 2)退出。
 
 `--glyphs` 仅对 `text` 生效;`--invert` 对所有模式生效(位图模式下交换两种颜色)。
 `--help` 会对当前终端探测一次,并在 `--mode` 说明末尾附上 `auto` 会选哪一种。
@@ -267,8 +283,8 @@ ANSI 渲染会忽略它。
 输出为纯黑白,并自带白色静默区,因此 `--invert` 会交换两种颜色而二维码保持自洽;
 字形集选项被忽略。
 
-`auto` 也用同一次探测在 Kitty 与 Sixel 之间优先选 Kitty;`--help` 探测会在 `--mode`
-说明末尾附上 `auto` 对当前终端会选哪一种。
+`auto` 与 `bitmap` 也用同一次探测在 Kitty 与 Sixel 之间优先选 Kitty;`--help` 探测
+会在 `--mode` 说明末尾附上 `auto` 对当前终端会选哪一种。
 
 ## Sixel 图形协议
 
