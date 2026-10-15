@@ -172,11 +172,51 @@ fn version_and_help_are_available() {
 }
 
 #[test]
-fn short_help_documents_the_glyph_letters() {
+fn long_help_documents_the_glyph_letters() {
+    let help = stdout(&["qr", "--help"]);
+    assert!(help.contains("half"), "{help}");
+    assert!(help.contains("(h)"), "{help}");
+    assert!(help.contains("quadrant"), "{help}");
+    assert!(help.contains("(q)"), "{help}");
+    assert!(help.contains("braille"), "{help}");
+    assert!(help.contains("(b)"), "{help}");
+}
+
+#[test]
+fn short_help_lists_possible_values() {
+    // The enumerated options spell out their values now (clap ValueEnum).
     let help = stdout(&["qr", "-h"]);
-    assert!(help.contains("half (h"), "{help}");
-    assert!(help.contains("quadrant (q"), "{help}");
-    assert!(help.contains("braille (b"), "{help}");
+    assert!(
+        help.contains("[possible values: auto, text, ansi, bitmap, kitty, sixel]"),
+        "{help}"
+    );
+    assert!(
+        help.contains("[possible values: half, quadrant, braille]"),
+        "{help}"
+    );
+    assert!(help.contains("[possible values: L, M, Q, H]"), "{help}");
+}
+
+#[test]
+fn top_help_explains_the_default_command_and_examples() {
+    let help = stdout(&["-h"]);
+    assert!(
+        help.contains("Usage: qrtxt [COMMAND] [OPTIONS] [DATA]"),
+        "{help}"
+    );
+    assert!(
+        help.contains("With no COMMAND a QR code is produced"),
+        "{help}"
+    );
+    assert!(help.contains("Examples:"), "{help}");
+    assert!(help.contains("qrtxt --mode bitmap"), "{help}");
+}
+
+#[test]
+fn subcommand_help_includes_examples() {
+    let help = stdout(&["pdf417", "-h"]);
+    assert!(help.contains("Examples:"), "{help}");
+    assert!(help.contains("qrtxt pdf417 --columns 1"), "{help}");
 }
 
 #[test]
@@ -201,6 +241,18 @@ fn sixel_mode_requires_a_terminal() {
     // Under the test harness stdout is a pipe, so the guard fires before any probe.
     qrtxt()
         .args(["--mode", "sixel", "hello"])
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("not a terminal"));
+}
+
+#[test]
+fn bitmap_mode_requires_a_terminal() {
+    // `bitmap` also insists on a graphics protocol; with no terminal it errors
+    // rather than quietly falling back to text.
+    qrtxt()
+        .args(["--mode", "bitmap", "hello"])
         .assert()
         .failure()
         .code(2)
@@ -257,6 +309,7 @@ fn short_help_lists_the_mode_option_and_its_values() {
     assert!(help.contains("--mode"), "{help}");
     assert!(help.contains("kitty"), "{help}");
     assert!(help.contains("sixel"), "{help}");
+    assert!(help.contains("bitmap"), "{help}");
 }
 
 #[test]

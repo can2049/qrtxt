@@ -15,19 +15,23 @@ terminal text. It is a library (`src/lib.rs`) plus a thin binary (`src/main.rs`)
   stdin reader). All argument parsing and all process-level side effects (locking
   stdin/stdout, probing the TTY, writing output) live in `src/cli/`: `mod.rs` holds the
   `Cli` schema, the `Cli -> Config` mapping and orchestration, `parse.rs` the argv entry
-  point, `probe.rs` the fused Kitty+Sixel capability probe, `help.rs` the `--help` hint.
+  point, `probe.rs` the fused Kitty+Sixel capability probe, `help.rs` the `--help` hint,
+  `value.rs` the clap `ValueEnum` impls for the `types` value enums (they live here, not in
+  `types.rs`, to keep the domain clap-free).
   Put new pure logic in a domain module, not in `cli`. `render` is a directory of
   single-responsibility modules (`frame` builds the ink grid, `text`/`ansi` draw it,
   `bitmap` scales it for the graphics protocols, `style` holds the SGR colours) unified
   by the `render::render_all` dispatch; add a module plus a `RenderMode` arm for a new
   renderer instead of growing one function.
-- Rendering is chosen by a single `--mode` selector (`auto`/`text`/`ansi`/`kitty`/`sixel`).
+- Rendering is chosen by a single `--mode` selector
+  (`auto`/`text`/`ansi`/`bitmap`/`kitty`/`sixel`).
   `auto`, the default, is resolved by `cli::resolve_mode` (called from `cli::run_with`)
   against the terminal's capabilities:
   it picks a bitmap only when `stdout` is a terminal and a protocol is supported (Kitty
-  before Sixel), so a piped or redirected run always yields text. Both protocols are asked
-  in ONE round trip (`probe.rs`) — they share one `/dev/tty` stream, so never probe them
-  from separate threads.
+  before Sixel), so a piped or redirected run always yields text. `bitmap` prefers Kitty
+  then Sixel the same way but errors instead of falling back to text. Both protocols are
+  asked in ONE round trip (`probe.rs`) — they share one `/dev/tty` stream, so never probe
+  them from separate threads.
 - The character renderers (`text`/`ansi`) set explicit colours, so the code is a
   self-contained dark-on-white image with a white quiet zone whatever the terminal's own
   colours are; a black-background terminal would otherwise merge the quiet zone with the
