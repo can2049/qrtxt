@@ -332,14 +332,14 @@ fn chunk_split_non_ascii_round_trips_in_order() {
 
 #[test]
 fn chinese_file_split_round_trips_in_order() {
-    let raw = std::fs::read("README.zh-CN.md").expect("readme present");
+    let raw = std::fs::read("README.md").expect("readme present");
     let mut expected = String::from_utf8(raw).expect("utf-8");
     if expected.ends_with("\r\n") {
         expected.truncate(expected.len() - 2);
     } else if expected.ends_with('\n') {
         expected.pop();
     }
-    let text = render(&["-f", "README.zh-CN.md", "-c", "30"]);
+    let text = render(&["-f", "README.md", "-c", "30"]);
     let blocks = multi_blocks(&text);
     assert_eq!(blocks.len(), 30, "expected 30 codes");
     assert_eq!(decode_blocks(&text), expected);
