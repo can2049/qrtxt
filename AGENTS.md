@@ -60,13 +60,14 @@ terminal text. It is a library (`src/lib.rs`) plus a thin binary (`src/main.rs`)
 - `tests/roundtrip.rs` renders the CLI output, parses it back into the module grid, and
   decodes it with `rqrr` to prove the printed code still scans. Add round-trip coverage
   for any new glyph, rendering, or encoding behavior.
-- `tests/roundtrip.rs` reads `README.zh-CN.md` from the working directory; keep that file present.
+- `tests/roundtrip.rs` reads `README.md` from the working directory; keep that file present.
 - CI (`.github/workflows/rust.yml`) checks formatting first (`cargo fmt --all -- --check`, to
   fail fast), then runs `cargo build`, `cargo clippy --all-targets -- -D warnings`, and
   `cargo test`. There is no rustfmt config file; the default style applies.
 
 ## Docs and commits
 
-- Keep `README.md` and `README.zh-CN.md` in sync when changing user-facing options.
+- `README.md` is bilingual (English first, Chinese after each section); keep both
+  languages in sync when changing user-facing options.
 - Commit messages are imperative and capitalized, with no Conventional-Commits prefix
   (e.g. "Declare UTF-8 and avoid Kanji segments for non-ASCII text").
