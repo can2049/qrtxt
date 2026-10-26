@@ -83,3 +83,10 @@ terminal text. It is a library (`src/lib.rs`) plus a thin binary (`src/main.rs`)
   that member first (`cargo publish -p qrtxt-winprobe`), then `qrtxt`: the root package
   excludes the member's sources, so the published qrtxt resolves the helper from
   crates.io.
+- Pushing a `v*` tag runs `.github/workflows/release.yml`. It refuses a tag whose version
+  differs from `Cargo.toml` or that is not yet merged into `main`, builds the target
+  matrix there, attaches the archives plus `SHA256SUMS` to the GitHub release, and emits
+  build provenance attestations. The release job is idempotent.
+- Exercise the pipeline without publishing by running
+  `gh workflow run release.yml -f tag=vX.Y.Z -f dry_run=true` (the workflow file must
+  already be on the default branch).

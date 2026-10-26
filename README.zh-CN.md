@@ -58,6 +58,33 @@ $ qrtxt "hi"
 cargo install qrtxt
 ```
 
+### 预编译二进制
+
+每个带标签的 Release 都在
+[releases 页面](https://github.com/can2049/qrtxt/releases) 提供预编译二进制,
+无需安装 Rust 工具链:
+
+| 平台 | 目标三元组 |
+| --- | --- |
+| Linux x86-64,静态 | `x86_64-unknown-linux-musl` |
+| Linux x86-64,glibc 2.35+ | `x86_64-unknown-linux-gnu` |
+| Linux ARM64,静态 | `aarch64-unknown-linux-musl` |
+| Linux ARM64,glibc 2.39+ | `aarch64-unknown-linux-gnu` |
+| macOS Apple Silicon | `aarch64-apple-darwin` |
+| macOS Intel | `x86_64-apple-darwin` |
+| Windows x64 | `x86_64-pc-windows-msvc` |
+| Windows ARM64 | `aarch64-pc-windows-msvc` |
+
+下载 `qrtxt-v<版本>-<目标三元组>.tar.gz`(Windows 为 `.zip`),解压后把 `qrtxt`
+放进 `PATH`。每个 Release 还附带 `SHA256SUMS` 与构建来源证明:
+
+```console
+gh attestation verify qrtxt-v0.8.0-x86_64-unknown-linux-musl.tar.gz -R can2049/qrtxt
+```
+
+`cargo binstall qrtxt` 会通过
+[cargo-binstall](https://github.com/cargo-bins/cargo-binstall) 安装对应的归档。
+
 从源码构建:
 
 ```console
