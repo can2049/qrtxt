@@ -11,6 +11,11 @@ homepage = "https://github.com/can2049/qrtxt"
 authors = ["CanWang <canwhut@gmail.com>"]
 keywords = ["cli", "qr", "qrcode", "terminal", "unicode"]
 categories = ["command-line-utilities", "encoding"]
+exclude = ["qrtxt-winprobe"]
+
+[workspace]
+members = ["qrtxt-winprobe"]
+default-members = [".", "qrtxt-winprobe"]
 
 [dependencies]
 clap = { version = "4.6.7", features = ["derive"] }
@@ -28,6 +33,9 @@ rxing = { version = "0.9.3", default-features = false, features = [
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", features = ["termios"] }
+
+[target.'cfg(windows)'.dependencies]
+qrtxt-winprobe = { version = "0.1.0", path = "qrtxt-winprobe" }
 
 [dev-dependencies]
 assert_cmd = "2.2.2"

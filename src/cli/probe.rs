@@ -14,17 +14,19 @@
 //! until both verdicts are final or the deadline passes. The reader then drains
 //! any trailing bytes so an unanswered reply is never left in the terminal's
 //! input queue, where the shell would echo it. Probing both concurrently is not
-//! an option — they share one `/dev/tty` input stream, so concurrent readers
-//! would race for the same bytes and the raw-mode termios writes.
+//! an option — they share one terminal input stream, so concurrent readers would
+//! race for the same bytes and the raw-mode console writes.
 //!
-//! The probe is Unix-only: it needs `/dev/tty` and termios raw mode. Elsewhere no
-//! portable, safe way to query the terminal exists, so the probe reports an
-//! empty reply and `auto` stays on text.
+//! The transport is platform-specific: Unix opens `/dev/tty` and switches it to
+//! raw mode through termios, while Windows reads the console input queue through
+//! the in-repo `qrtxt-winprobe` crate, whose safe API wraps the Win32 calls. A
+//! platform with neither transport reports an empty reply and `auto` stays on
+//! text.
 
 use std::io::IsTerminal;
 #[cfg(unix)]
 use std::io::Write;
-#[cfg(any(unix, test))]
+#[cfg(any(unix, windows, test))]
 use std::time::Duration;
 
 use crate::error::AppError;
@@ -34,7 +36,7 @@ use crate::error::AppError;
 const KITTY_PROBE_ID: u32 = 1_000_000;
 
 /// How long to wait for probe replies before giving up.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const PROBE_TIMEOUT: Duration = Duration::from_millis(300);
 
 /// Terminal graphics capabilities discovered by a probe.
@@ -179,10 +181,32 @@ where
         })
 }
 
-/// Non-Unix fallback: there is no `/dev/tty`, and querying the terminal would
-/// need platform-specific raw-mode code. An empty reply is the conservative
-/// verdict — no protocol is claimed, so `auto` falls back to text.
-#[cfg(not(unix))]
+/// Windows transport: `qrtxt-winprobe` writes the queries to standard output
+/// and collects the replies from `CONIN$`, filtering console key records.
+#[cfg(windows)]
+fn round_trip<F>(
+    _open_context: &'static str,
+    query_context: &'static str,
+    queries: &[&[u8]],
+    done: F,
+) -> Result<Option<Vec<u8>>, AppError>
+where
+    F: Fn(&[u8]) -> bool,
+{
+    if !std::io::stdout().is_terminal() {
+        return Ok(None);
+    }
+    qrtxt_winprobe::probe(queries, PROBE_TIMEOUT, &done)
+        .map(Some)
+        .map_err(|source| AppError::Io {
+            context: query_context,
+            source,
+        })
+}
+
+/// Fallback for platforms without a terminal transport: no protocol is claimed,
+/// so `auto` falls back to text.
+#[cfg(not(any(unix, windows)))]
 fn round_trip<F>(
     _open_context: &'static str,
     _query_context: &'static str,
