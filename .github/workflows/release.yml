@@ -83,15 +83,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Linux: build on the oldest image so the glibc baseline stays low;
-          # the musl archives are fully static. Revisit once ubuntu-22.04
-          # retires.
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-22.04
+          # Linux: static musl builds run on any distribution, including ones
+          # whose glibc is older than the runner image. Do not add gnu targets
+          # here: cargo-binstall prefers them over musl, and a gnu archive
+          # built on these runners needs glibc 2.35+ (x86-64) or 2.39+ (arm64).
           - target: x86_64-unknown-linux-musl
             os: ubuntu-22.04
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-24.04-arm
           - target: aarch64-unknown-linux-musl
             os: ubuntu-24.04-arm
           # macOS: macos-15-intel is the last x86_64 image (planned to retire
