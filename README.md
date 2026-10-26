@@ -336,9 +336,11 @@ Support detection is weaker than Kitty's: Sixel has no handshake, so `qrtxt` sen
 a Primary Device Attributes query and only accepts terminals that advertise Sixel
 (device attribute `4`). A terminal that supports Sixel without advertising it is
 treated as unsupported, so the tool never prints escape bytes a terminal cannot
-draw. As with `--mode kitty`, the output is pure black and white with its own white
-quiet zone, `--invert` swaps the two colours, and the glyph set is ignored. The
-`--help` probe reports it on the `--mode` entry the same way.
+draw. The probe runs on Windows too — the replies are read from the console input
+queue — so `auto` picks Sixel in Windows Terminal (verified with 1.24). As with
+`--mode kitty`, the output is pure black and white with its own white quiet zone,
+`--invert` swaps the two colours, and the glyph set is ignored. The `--help` probe
+reports it on the `--mode` entry the same way.
 
 The image declares square pixels, so the modules stay square on terminals that
 honour the raster attributes — but Sixel rendering has not been visually verified

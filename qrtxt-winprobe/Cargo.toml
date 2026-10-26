@@ -1,0 +1,21 @@
+[package]
+name = "qrtxt-winprobe"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Safe terminal capability queries over the Windows console"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/can2049/qrtxt"
+homepage = "https://github.com/can2049/qrtxt"
+authors = ["CanWang <canwhut@gmail.com>"]
+keywords = ["windows", "console", "terminal", "query"]
+categories = ["command-line-interface"]
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+] }

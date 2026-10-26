@@ -628,9 +628,17 @@ dependencies = [
  "datamatrix",
  "predicates",
  "qrcode",
+ "qrtxt-winprobe",
  "rqrr",
  "rustix",
  "rxing",
+]
+
+[[package]]
+name = "qrtxt-winprobe"
+version = "0.1.0"
+dependencies = [
+ "windows-sys",
 ]
 
 [[package]]
