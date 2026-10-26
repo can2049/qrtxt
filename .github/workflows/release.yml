@@ -37,7 +37,7 @@ env:
 jobs:
   verify:
     name: Verify tag
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
       tag: ${{ steps.check.outputs.tag }}
@@ -83,8 +83,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Linux: build on the oldest supported image so the glibc baseline
-          # stays low; the musl archives are fully static.
+          # Linux: build on the oldest image so the glibc baseline stays low;
+          # the musl archives are fully static. Revisit once ubuntu-22.04
+          # retires.
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-22.04
           - target: x86_64-unknown-linux-musl
@@ -170,7 +171,7 @@ jobs:
     name: Publish release
     needs: [verify, build]
     if: ${{ inputs.dry_run != true }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: write
@@ -207,6 +208,7 @@ jobs:
             echo "### Release assets for ${{ needs.verify.outputs.tag }}"
             echo
             echo '```'
-            sha256sum -- *
+            ls -lh -- *
             echo '```'
+            echo "SHA256SUMS is attached for integrity; every archive also carries a build provenance attestation."
           } >> "$GITHUB_STEP_SUMMARY"
