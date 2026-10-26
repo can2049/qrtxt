@@ -81,17 +81,16 @@ a Rust toolchain:
 | Platform | Target |
 | --- | --- |
 | Linux x86-64, static | `x86_64-unknown-linux-musl` |
-| Linux x86-64, glibc 2.35+ | `x86_64-unknown-linux-gnu` |
 | Linux ARM64, static | `aarch64-unknown-linux-musl` |
-| Linux ARM64, glibc 2.39+ | `aarch64-unknown-linux-gnu` |
 | macOS Apple Silicon | `aarch64-apple-darwin` |
 | macOS Intel | `x86_64-apple-darwin` |
 | Windows x64 | `x86_64-pc-windows-msvc` |
 | Windows ARM64 | `aarch64-pc-windows-msvc` |
 
-Download `qrtxt-v<version>-<target>.tar.gz` (`.zip` on Windows), unpack it, and
-put `qrtxt` on your `PATH`. Each release also ships `SHA256SUMS` and a build
-provenance attestation:
+The Linux archives are fully static, so they run on any distribution whatever
+its glibc version. Download `qrtxt-v<version>-<target>.tar.gz` (`.zip` on
+Windows), unpack it, and put `qrtxt` on your `PATH`. Each release also ships
+`SHA256SUMS` and a build provenance attestation:
 
 ```console
 gh attestation verify qrtxt-v0.8.0-x86_64-unknown-linux-musl.tar.gz -R can2049/qrtxt

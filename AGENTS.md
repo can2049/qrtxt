@@ -90,3 +90,6 @@ terminal text. It is a library (`src/lib.rs`) plus a thin binary (`src/main.rs`)
 - Exercise the pipeline without publishing by running
   `gh workflow run release.yml -f tag=vX.Y.Z -f dry_run=true` (the workflow file must
   already be on the default branch).
+- Linux artifacts are static musl only. A gnu archive built on a hosted runner needs
+  glibc 2.35+ (x86-64) or 2.39+ (arm64), and `cargo-binstall` prefers it over musl, so
+  adding gnu targets back would break installs on older distributions.

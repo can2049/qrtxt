@@ -67,14 +67,13 @@ cargo install qrtxt
 | 平台 | 目标三元组 |
 | --- | --- |
 | Linux x86-64,静态 | `x86_64-unknown-linux-musl` |
-| Linux x86-64,glibc 2.35+ | `x86_64-unknown-linux-gnu` |
 | Linux ARM64,静态 | `aarch64-unknown-linux-musl` |
-| Linux ARM64,glibc 2.39+ | `aarch64-unknown-linux-gnu` |
 | macOS Apple Silicon | `aarch64-apple-darwin` |
 | macOS Intel | `x86_64-apple-darwin` |
 | Windows x64 | `x86_64-pc-windows-msvc` |
 | Windows ARM64 | `aarch64-pc-windows-msvc` |
 
+Linux 归档是完全静态链接的,因此在任何 glibc 版本的发行版上都能运行。
 下载 `qrtxt-v<版本>-<目标三元组>.tar.gz`(Windows 为 `.zip`),解压后把 `qrtxt`
 放进 `PATH`。每个 Release 还附带 `SHA256SUMS` 与构建来源证明:
 
