@@ -16,8 +16,15 @@
 //! input queue, where the shell would echo it. Probing both concurrently is not
 //! an option — they share one `/dev/tty` input stream, so concurrent readers
 //! would race for the same bytes and the raw-mode termios writes.
+//!
+//! The probe is Unix-only: it needs `/dev/tty` and termios raw mode. Elsewhere no
+//! portable, safe way to query the terminal exists, so the probe reports an
+//! empty reply and `auto` stays on text.
 
-use std::io::{IsTerminal, Write};
+use std::io::IsTerminal;
+#[cfg(unix)]
+use std::io::Write;
+#[cfg(any(unix, test))]
 use std::time::Duration;
 
 use crate::error::AppError;
@@ -27,6 +34,7 @@ use crate::error::AppError;
 const KITTY_PROBE_ID: u32 = 1_000_000;
 
 /// How long to wait for probe replies before giving up.
+#[cfg(unix)]
 const PROBE_TIMEOUT: Duration = Duration::from_millis(300);
 
 /// Terminal graphics capabilities discovered by a probe.
@@ -142,6 +150,7 @@ fn capabilities_of(buffer: &[u8]) -> Capabilities {
 /// Returns `Ok(None)` when there is no terminal to ask (standard output is not a
 /// terminal). Sharing one round trip means `auto` pays a single timeout window
 /// for both protocols instead of chaining two.
+#[cfg(unix)]
 fn round_trip<F>(
     open_context: &'static str,
     query_context: &'static str,
@@ -170,7 +179,27 @@ where
         })
 }
 
+/// Non-Unix fallback: there is no `/dev/tty`, and querying the terminal would
+/// need platform-specific raw-mode code. An empty reply is the conservative
+/// verdict — no protocol is claimed, so `auto` falls back to text.
+#[cfg(not(unix))]
+fn round_trip<F>(
+    _open_context: &'static str,
+    _query_context: &'static str,
+    _queries: &[&[u8]],
+    _done: F,
+) -> Result<Option<Vec<u8>>, AppError>
+where
+    F: Fn(&[u8]) -> bool,
+{
+    if !std::io::stdout().is_terminal() {
+        return Ok(None);
+    }
+    Ok(Some(Vec::new()))
+}
+
 /// Write `queries` and read the reply in raw mode, with a short timeout.
+#[cfg(unix)]
 fn probe<F>(tty: &mut std::fs::File, queries: &[&[u8]], done: &F) -> std::io::Result<Vec<u8>>
 where
     F: Fn(&[u8]) -> bool,
@@ -214,6 +243,7 @@ where
 ///
 /// The caller must first put `reader` in raw mode with a read timeout (`VMIN` /
 /// `VTIME`), so each read returns promptly instead of blocking for input.
+#[cfg(any(unix, test))]
 fn read_until<R, F>(reader: &mut R, timeout: Duration, done: &F) -> std::io::Result<Vec<u8>>
 where
     R: std::io::Read,
@@ -247,11 +277,13 @@ where
 }
 
 /// Restores the terminal's saved attributes when dropped, even on early return.
+#[cfg(unix)]
 struct TermiosGuard {
     tty: std::fs::File,
     original: rustix::termios::Termios,
 }
 
+#[cfg(unix)]
 impl Drop for TermiosGuard {
     fn drop(&mut self) {
         use std::os::fd::AsFd as _;

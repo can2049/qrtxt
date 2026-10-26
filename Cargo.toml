@@ -25,6 +25,8 @@ rxing = { version = "0.9.3", default-features = false, features = [
     "encoders",
     "encoding_rs",
 ] }
+
+[target.'cfg(unix)'.dependencies]
 rustix = { version = "1", features = ["termios"] }
 
 [dev-dependencies]
